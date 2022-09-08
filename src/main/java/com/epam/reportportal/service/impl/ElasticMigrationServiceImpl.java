@@ -78,7 +78,7 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
 				Map.of("ids", launchIds),
 				new LogRowMapper()
 		);
-		elasticSearchClient.save(createIndexMap(logMessageWithLaunchIdList, logMessageWithoutLaunchIdList));
+		elasticSearchClient.save(createProjectMap(logMessageWithLaunchIdList, logMessageWithoutLaunchIdList));
 		LOGGER.info("Migration completed at {}", LocalDateTime.now());
 	}
 
@@ -90,26 +90,26 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
 				Map.of("time", date),
 				new LogRowMapper()
 		);
-		elasticSearchClient.save(createIndexMap(logMessageWithLaunchIdList, logMessageWithoutLaunchIdList));
+		elasticSearchClient.save(createProjectMap(logMessageWithLaunchIdList, logMessageWithoutLaunchIdList));
 		LOGGER.info("Migration completed at {}", LocalDateTime.now());
 	}
 
-	private TreeMap<Long, List<LogMessage>> createIndexMap(List<LogMessage> logsWithLaunchId, List<LogMessage> logsWithoutLaunchId) {
-		TreeMap<Long, List<LogMessage>> indexMap = new TreeMap<>();
+	private TreeMap<Long, List<LogMessage>> createProjectMap(List<LogMessage> logsWithLaunchId, List<LogMessage> logsWithoutLaunchId) {
+		TreeMap<Long, List<LogMessage>> projectMap = new TreeMap<>();
 		for (LogMessage logMessage : logsWithLaunchId) {
 			List<LogMessage> logMessageList = new ArrayList<>();
 			logMessageList.add(logMessage);
-			indexMap.put(logMessage.getLaunchId(), logMessageList);
+			projectMap.put(logMessage.getProjectId(), logMessageList);
 		}
 		for (LogMessage logMessage : logsWithoutLaunchId) {
-			if (indexMap.containsKey(logMessage.getLaunchId())) {
-				indexMap.get(logMessage.getLaunchId()).add(logMessage);
+			if (projectMap.containsKey(logMessage.getProjectId())) {
+				projectMap.get(logMessage.getProjectId()).add(logMessage);
 			} else {
 				List<LogMessage> logMessageList = new ArrayList<>();
 				logMessageList.add(logMessage);
-				indexMap.put(logMessage.getLaunchId(), logMessageList);
+				projectMap.put(logMessage.getProjectId(), logMessageList);
 			}
 		}
-		return indexMap;
+		return projectMap;
 	}
 }

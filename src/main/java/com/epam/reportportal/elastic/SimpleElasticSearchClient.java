@@ -43,8 +43,8 @@ public class SimpleElasticSearchClient {
 		}
 		String create = "{\"create\":{ }}\n";
 
-		logMessageMap.descendingMap().forEach((launchId, logMessageList) -> {
-			String indexName = "logs-reportportal-" + logMessageList.get(0).getProjectId() + "-" + launchId;
+		logMessageMap.descendingMap().forEach((projectId, logMessageList) -> {
+			String indexName = "logs-reportportal-" + logMessageList.get(0).getProjectId();
 			StringBuilder jsonBodyBuilder = new StringBuilder();
 			for (LogMessage logMessage : logMessageList) {
 				jsonBodyBuilder.append(create).append(convertToJson(logMessage)).append("\n");
