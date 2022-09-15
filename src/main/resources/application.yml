@@ -3,6 +3,12 @@ rp:
 #    host: http://elasticsearch:9200
 #    username: elastic
 #    password: elastic1q2w3e
+  migration:
+    elastic:
+      #Time before which logs should be migrated
+      startDate: '2022-07-21T09:00:00'
+      #Maximum number of logs migrated at once
+      logsNumber:
 
   datasource:
     type: com.zaxxer.hikari.HikariDataSource

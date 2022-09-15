@@ -24,7 +24,7 @@ import java.util.TreeMap;
 @Service
 public class SimpleElasticSearchClient {
 
-	private final static String SEARCH_QUERY_JSON = "{\"query\":{\"match_all\":{}},\"size\":1,\"sort\":[{\"@timestamp\":{\"order\":\"asc\"}}]}";
+	private final static String SEARCH_QUERY_JSON = "{\"query\":{\"match_all\":{}},\"size\":1,\"sort\":[{\"id\":{\"order\":\"asc\"}}]}";
 
 	private final String host;
 	private final RestTemplate restTemplate;
