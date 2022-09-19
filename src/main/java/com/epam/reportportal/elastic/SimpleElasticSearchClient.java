@@ -24,7 +24,7 @@ import java.util.TreeMap;
 @Service
 public class SimpleElasticSearchClient {
 
-	private final static String SEARCH_QUERY_JSON = "{\"query\":{\"match_all\":{}},\"size\":1,\"sort\":[{\"@timestamp\":{\"order\":\"asc\"}}]}";
+	private final static String SEARCH_QUERY_JSON = "{\"query\":{\"match_all\":{}},\"size\":1,\"sort\":[{\"id\":{\"order\":\"asc\"}}]}";
 
 	private final String host;
 	private final RestTemplate restTemplate;
@@ -43,8 +43,8 @@ public class SimpleElasticSearchClient {
 		}
 		String create = "{\"create\":{ }}\n";
 
-		logMessageMap.descendingMap().forEach((launchId, logMessageList) -> {
-			String indexName = "logs-reportportal-" + logMessageList.get(0).getProjectId() + "-" + launchId;
+		logMessageMap.descendingMap().forEach((projectId, logMessageList) -> {
+			String indexName = "logs-reportportal-" + logMessageList.get(0).getProjectId();
 			StringBuilder jsonBodyBuilder = new StringBuilder();
 			for (LogMessage logMessage : logMessageList) {
 				jsonBodyBuilder.append(create).append(convertToJson(logMessage)).append("\n");
