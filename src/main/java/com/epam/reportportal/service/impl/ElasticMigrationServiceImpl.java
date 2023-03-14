@@ -106,7 +106,6 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
       LOGGER.info("Closest to start time log id : {}", closestLogId);
       compareIdsAndMigrate(databaseFirstLogId, closestLogId);
     } else {
-      LOGGER.info("");
       Optional<LogMessage> firstLogFromElastic = elasticSearchClient.getFirstLogFromElasticSearch();
       if (firstLogFromElastic.isEmpty()) {
         migrateAllLogs();
