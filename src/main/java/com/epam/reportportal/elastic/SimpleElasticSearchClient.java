@@ -24,7 +24,7 @@ import org.springframework.web.client.RestTemplate;
 @Service
 public class SimpleElasticSearchClient {
 
-  private final static String SEARCH_QUERY_JSON =
+  private static final String SEARCH_QUERY_JSON =
       "{\"query\":{\"match_all\":{}},\"size\":1,\"sort\":[{\"id\":{\"order\":\"asc\"}}]}";
 
   private final static String SEARCH_BY_LAUNCH_ID_JSON =
@@ -67,9 +67,8 @@ public class SimpleElasticSearchClient {
             SearchResponse.class
         );
 
-    if (searchResponse != null && searchResponse.getHits() != null
-        && searchResponse.getHits().getHits() != null && !searchResponse.getHits().getHits()
-        .isEmpty()) {
+    if (searchResponse != null && searchResponse.getHits() != null && !CollectionUtils.isEmpty(
+        searchResponse.getHits().getHits())) {
       return Optional.of(searchResponse.getHits().getHits().get(0).getSource());
     }
 
@@ -84,7 +83,8 @@ public class SimpleElasticSearchClient {
             getStringHttpEntity(query), SearchResponse.class
         );
 
-    if (searchResponse != null && !CollectionUtils.isEmpty(searchResponse.getHits().getHits())) {
+    if (searchResponse != null && searchResponse.getHits() != null && !CollectionUtils.isEmpty(
+        searchResponse.getHits().getHits())) {
       return Optional.of(searchResponse.getHits().getHits().get(0).getSource());
     } else {
       return Optional.empty();
@@ -93,10 +93,11 @@ public class SimpleElasticSearchClient {
 
   public void updateLogsLaunchIdByTestItemId(List<Long> testItemIds, Long launchId,
       Long projectId) {
-    String indexName = "logs-reportportal-" + projectId;
     if (CollectionUtils.isEmpty(testItemIds)) {
       return;
     }
+
+    String indexName = "logs-reportportal-" + projectId;
 
     String logUpdateBody = getUpdateLaunchIdJson(testItemIds, launchId).toString();
 
@@ -106,31 +107,15 @@ public class SimpleElasticSearchClient {
   }
 
   private JSONObject convertToJson(LogMessage logMessage) {
-    JSONObject personJsonObject = new JSONObject();
-    personJsonObject.put("id", logMessage.getId());
-    personJsonObject.put("message", logMessage.getLogMessage());
-    personJsonObject.put("itemId", logMessage.getItemId());
-    personJsonObject.put("@timestamp", logMessage.getLogTime());
-    personJsonObject.put("launchId", logMessage.getLaunchId());
-
-    return personJsonObject;
+    return new JSONObject().put("id", logMessage.getId()).put("message", logMessage.getLogMessage())
+        .put("itemId", logMessage.getItemId()).put("@timestamp", logMessage.getLogTime())
+        .put("launchId", logMessage.getLaunchId());
   }
 
   private JSONObject getUpdateLaunchIdJson(List<Long> testItemIds, Long newLaunchId) {
-    JSONObject body = new JSONObject();
-    body.put("script", "ctx._source.launchId = " + newLaunchId);
-
-    JSONArray testItemArray = new JSONArray(testItemIds);
-
-    JSONObject terms = new JSONObject();
-    terms.put("itemId", testItemArray);
-
-    JSONObject query = new JSONObject();
-    query.put("terms", terms);
-
-    body.put("query", query);
-
-    return body;
+    return new JSONObject().put("script", "ctx._source.launchId = " + newLaunchId).put("query",
+        new JSONObject().put("terms", new JSONObject().put("itemId", new JSONArray(testItemIds)))
+    );
   }
 
   private HttpEntity<String> getStringHttpEntity(String body) {
