@@ -112,6 +112,7 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
         return;
       }
       Long firstLogFromElasticId = firstLogFromElastic.get().getId();
+      LOGGER.info("First log id from elastic : {}", firstLogFromElasticId);
       compareIdsAndMigrate(databaseFirstLogId, firstLogFromElasticId);
     }
   }
