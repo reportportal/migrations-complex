@@ -6,7 +6,8 @@ rp:
   migration:
     elastic:
       #Time before which logs should be migrated
-      startDate: '2022-07-21T09:00:00'
+      #For example '2022-07-21T09:00:00'
+      startDate:
       #Maximum number of logs migrated at once
       logsNumber:
 
