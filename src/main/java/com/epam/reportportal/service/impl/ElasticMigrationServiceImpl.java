@@ -101,7 +101,7 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
             Map.of("time", startDateTime), Long.class
         );
       } catch (EmptyResultDataAccessException e) {
-        closestLogId = (long) Integer.MAX_VALUE;
+        closestLogId = (long) Integer.MIN_VALUE;
       }
       LOGGER.info("Closest to start time log id : {}", closestLogId);
       compareIdsAndMigrate(databaseFirstLogId, closestLogId);
@@ -131,8 +131,12 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
         lastMigratedLogId =
             migrateLogsBeforeId(Objects.requireNonNullElse(lastMigratedLogId, startLogId));
         i++;
-        LOGGER.info("Iteration {}, last migrated log id : {}", i, lastMigratedLogId);
-      } while (!lastMigratedLogId.equals(Long.MAX_VALUE));
+        if (lastMigratedLogId.equals(Long.MIN_VALUE)) {
+          LOGGER.info("Iteration {}, no migrated logs", i);
+        } else {
+          LOGGER.info("Iteration {}, last migrated log id : {}", i, lastMigratedLogId);
+        }
+      } while (!lastMigratedLogId.equals(Long.MIN_VALUE));
 
       migrateMergedLaunches(startLogId);
 
@@ -150,7 +154,7 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
       if (lastMigratedLogId != null) {
         do {
           lastMigratedLogId = migrateLogsBeforeId(lastMigratedLogId);
-        } while (!lastMigratedLogId.equals(Long.MAX_VALUE));
+        } while (!lastMigratedLogId.equals(Long.MIN_VALUE));
       } else {
         logMessageWithLaunchIdList =
             namedParameterJdbcTemplate.query(SELECT_ALL_LOGS_WITH_LAUNCH_ID,
@@ -168,7 +172,7 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
             getLastMigratedLogId(logMessageWithLaunchIdList, logMessageWithoutLaunchIdList);
       }
 
-    } while (!lastMigratedLogId.equals(Long.MAX_VALUE));
+    } while (!lastMigratedLogId.equals(Long.MIN_VALUE));
     LOGGER.info("Migration completed at {}", LocalDateTime.now());
   }
 
@@ -221,16 +225,16 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
     if (!logMessagesWithLaunchId.isEmpty()) {
       logWithLaunchId = logMessagesWithLaunchId.get(logMessagesWithLaunchId.size() - 1).getId();
     } else {
-      logWithLaunchId = Long.MAX_VALUE;
+      logWithLaunchId = Long.MIN_VALUE;
     }
     if (!logMessagesWithoutLaunchId.isEmpty()) {
       logWithoutLaunchId =
           logMessagesWithoutLaunchId.get(logMessagesWithoutLaunchId.size() - 1).getId();
     } else {
-      logWithoutLaunchId = Long.MAX_VALUE;
+      logWithoutLaunchId = Long.MIN_VALUE;
     }
 
-    return logWithLaunchId.compareTo(logWithoutLaunchId) < 0 ? logWithLaunchId : logWithoutLaunchId;
+    return logWithLaunchId.compareTo(logWithoutLaunchId) > 0 ? logWithLaunchId : logWithoutLaunchId;
   }
 
   private void migrateMergedLaunches(Long startLogId) {
