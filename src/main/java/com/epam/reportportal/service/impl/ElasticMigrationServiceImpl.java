@@ -42,32 +42,43 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
       "SELECT test_item.item_id FROM test_item WHERE launch_id = ?";
   private static final String SELECT_LOG_ID_CLOSEST_TO_TIME =
       "SELECT id FROM log WHERE log_time >= :time ORDER BY id LIMIT 1";
-
   private static final String SELECT_LAUNCH_ID_BY_LOG_ID =
       "SELECT test_item.launch_id FROM test_item JOIN log ON test_item.item_id = log.item_id "
           + "WHERE log.id = ?";
-  private static final String SELECT_ALL_LOGS_WITH_LAUNCH_ID =
-      "SELECT id, log_time, log_message, item_id, launch_id, project_id FROM log "
-          + "WHERE launch_id IS NOT NULL ORDER BY id DESC LIMIT :maxLogNumber";
-  private static final String SELECT_ALL_LOGS_WITHOUT_LAUNCH_ID =
-      "SELECT l.id, log_time, log_message, l.item_id AS item_id, ti.launch_id AS launch_id, "
-          + "project_id FROM log l " + "JOIN test_item ti ON l.item_id = ti.item_id "
-          + "UNION SELECT l.id, log_time, log_message, l.item_id AS item_id, ti.launch_id "
-          + "AS launch_id, project_id FROM log l "
-          + "JOIN test_item ti ON l.item_id = ti.item_id WHERE retry_of IS NOT NULL "
-          + "AND retry_of IN (SELECT item_id FROM test_item) ORDER BY id DESC LIMIT :maxLogNumber";
-  private static final String SELECT_LOGS_WITH_LAUNCH_ID_BEFORE_ID =
-      "SELECT id, log_time, log_message, item_id, launch_id, project_id FROM log WHERE launch_id "
-          + "IS NOT NULL AND id < :id" + " ORDER BY id DESC LIMIT :maxLogNumber";
-  private static final String SELECT_LOGS_WITHOUT_LAUNCH_ID_BEFORE_ID =
-      "SELECT l.id, log_time, log_message, l.item_id AS item_id, ti.launch_id AS launch_id, "
-          + "project_id FROM log l "
-          + "JOIN test_item ti ON l.item_id = ti.item_id WHERE l.id < :id "
-          + "UNION SELECT l.id, log_time, log_message, l.item_id AS item_id, ti.launch_id "
-          + "AS launch_id, project_id FROM log l "
-          + "JOIN test_item ti ON l.item_id = ti.item_id WHERE retry_of IS NOT NULL "
-          + "AND retry_of IN (SELECT item_id FROM test_item "
-          + "WHERE l.id < :id) ORDER BY id DESC LIMIT :maxLogNumber";
+
+  private static final String SELECT_LOGS =
+      "SELECT id, log_time, log_message, item_id, launch_id, project_id\n" + "FROM log\n"
+          + "WHERE launch_id IS NOT NULL\n" + "UNION\n"
+          + "SELECT id, log_time, log_message, item_id, launch_id, project_id\n"
+          + "FROM (SELECT l.id,\n" + "             log_time,\n" + "             log_message,\n"
+          + "             l.item_id    AS item_id,\n" + "             ti.launch_id AS launch_id,\n"
+          + "             project_id\n" + "      FROM log l\n"
+          + "               JOIN test_item ti ON l.item_id = ti.item_id\n"
+          + "      WHERE l.launch_id IS NULL\n" + "        AND retry_of IS NULL\n" + "      UNION\n"
+          + "      SELECT l.id,\n" + "             log_time,\n" + "             log_message,\n"
+          + "             l.item_id    AS item_id,\n" + "             ti.launch_id AS launch_id,\n"
+          + "             project_id\n" + "      FROM log l\n"
+          + "               JOIN test_item AS retry ON l.item_id = retry.item_id\n"
+          + "               JOIN test_item ti ON retry.retry_of = ti.item_id\n"
+          + "      WHERE retry.retry_of IS NOT NULL) AS t2\n" + "ORDER BY id DESC\n";
+
+  private static final String SELECT_LOGS_BEFORE_ID =
+      "SELECT id, log_time, log_message, item_id, launch_id, project_id\n" + "FROM log\n"
+          + "WHERE launch_id IS NOT NULL AND id < :id\n" + "UNION\n"
+          + "SELECT id, log_time, log_message, item_id, launch_id, project_id\n"
+          + "FROM (SELECT l.id,\n" + "             log_time,\n" + "             log_message,\n"
+          + "             l.item_id    AS item_id,\n" + "             ti.launch_id AS launch_id,\n"
+          + "             project_id\n" + "      FROM log l\n"
+          + "               JOIN test_item ti ON l.item_id = ti.item_id\n"
+          + "      WHERE l.launch_id IS NULL\n" + "        AND retry_of IS NULL AND l.id < :id\n"
+          + "      UNION\n" + "      SELECT l.id,\n" + "             log_time,\n"
+          + "             log_message,\n" + "             l.item_id    AS item_id,\n"
+          + "             ti.launch_id AS launch_id,\n" + "             project_id\n"
+          + "      FROM log l\n"
+          + "               JOIN test_item AS retry ON l.item_id = retry.item_id\n"
+          + "               JOIN test_item ti ON retry.retry_of = ti.item_id\n"
+          + "      WHERE retry.retry_of IS NOT NULL AND l.id < :id) AS t2\n"
+          + "ORDER BY id DESC LIMIT :maxLogNumber\n";
 
   public ElasticMigrationServiceImpl(JdbcTemplate jdbcTemplate,
       SimpleElasticSearchClient simpleElasticSearchClient,
@@ -147,29 +158,35 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
   private void migrateAllLogs() {
     LOGGER.info("Migrating all logs from Postgres");
 
-    List<LogMessage> logMessageWithLaunchIdList;
-    List<LogMessage> logMessageWithoutLaunchIdList;
     Long lastMigratedLogId = null;
+    int iteration = 0;
     do {
       if (lastMigratedLogId != null) {
         do {
           lastMigratedLogId = migrateLogsBeforeId(lastMigratedLogId);
+          iteration++;
+          if (lastMigratedLogId.equals(Long.MIN_VALUE)) {
+            LOGGER.info("Iteration {}, no migrated logs", iteration);
+          } else {
+            LOGGER.info("Iteration {}, last migrated log id : {}", iteration, lastMigratedLogId);
+          }
         } while (!lastMigratedLogId.equals(Long.MIN_VALUE));
       } else {
-        logMessageWithLaunchIdList =
-            namedParameterJdbcTemplate.query(SELECT_ALL_LOGS_WITH_LAUNCH_ID,
-                Map.of("maxLogNumber", maxLogNumber), new LogRowMapper()
-            );
-        logMessageWithoutLaunchIdList =
-            namedParameterJdbcTemplate.query(SELECT_ALL_LOGS_WITHOUT_LAUNCH_ID,
-                Map.of("maxLogNumber", maxLogNumber), new LogRowMapper()
+        List<LogMessage> logMessages =
+            namedParameterJdbcTemplate.query(SELECT_LOGS, Map.of("maxLogNumber", maxLogNumber),
+                new LogRowMapper()
             );
 
-        elasticSearchClient.save(
-            groupLogsByProject(logMessageWithLaunchIdList, logMessageWithoutLaunchIdList));
+        iteration++;
+        LOGGER.info("Log messages ids : {}",
+            logMessages.stream().map(LogMessage::getId).collect(Collectors.toList())
+        );
 
-        lastMigratedLogId =
-            getLastMigratedLogId(logMessageWithLaunchIdList, logMessageWithoutLaunchIdList);
+        LOGGER.info("Iteration {}, last migrated log id : {}", iteration, lastMigratedLogId);
+
+        elasticSearchClient.save(groupLogsByProject(logMessages));
+
+        lastMigratedLogId = getLastMigratedLogId(logMessages);
       }
 
     } while (!lastMigratedLogId.equals(Long.MIN_VALUE));
@@ -177,35 +194,20 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
   }
 
   private Long migrateLogsBeforeId(Long id) {
-    List<LogMessage> logMessageWithLaunchIdList =
-        namedParameterJdbcTemplate.query(SELECT_LOGS_WITH_LAUNCH_ID_BEFORE_ID,
-            Map.of("id", id, "maxLogNumber", maxLogNumber), new LogRowMapper()
-        );
-    LOGGER.info("Log messages with launchId list : {}",
-        logMessageWithLaunchIdList.stream().map(LogMessage::getId).collect(Collectors.toList())
+    List<LogMessage> logMessages = namedParameterJdbcTemplate.query(SELECT_LOGS_BEFORE_ID,
+        Map.of("id", id, "maxLogNumber", maxLogNumber), new LogRowMapper()
     );
-    List<LogMessage> logMessageWithoutLaunchIdList =
-        namedParameterJdbcTemplate.query(SELECT_LOGS_WITHOUT_LAUNCH_ID_BEFORE_ID,
-            Map.of("id", id, "maxLogNumber", maxLogNumber), new LogRowMapper()
-        );
-    LOGGER.info("Log messages without launchId list : {}",
-        logMessageWithoutLaunchIdList.stream().map(LogMessage::getId).collect(Collectors.toList())
+    LOGGER.info("Log messages ids : {}",
+        logMessages.stream().map(LogMessage::getId).collect(Collectors.toList())
     );
-    elasticSearchClient.save(
-        groupLogsByProject(logMessageWithLaunchIdList, logMessageWithoutLaunchIdList));
+    elasticSearchClient.save(groupLogsByProject(logMessages));
 
-    return getLastMigratedLogId(logMessageWithLaunchIdList, logMessageWithoutLaunchIdList);
+    return getLastMigratedLogId(logMessages);
   }
 
-  private TreeMap<Long, List<LogMessage>> groupLogsByProject(List<LogMessage> logsWithLaunchId,
-      List<LogMessage> logsWithoutLaunchId) {
+  private TreeMap<Long, List<LogMessage>> groupLogsByProject(List<LogMessage> logMessages) {
     TreeMap<Long, List<LogMessage>> projectMap = new TreeMap<>();
-    for (LogMessage logMessage : logsWithLaunchId) {
-      List<LogMessage> logMessageList = new ArrayList<>();
-      logMessageList.add(logMessage);
-      projectMap.put(logMessage.getProjectId(), logMessageList);
-    }
-    for (LogMessage logMessage : logsWithoutLaunchId) {
+    for (LogMessage logMessage : logMessages) {
       if (projectMap.containsKey(logMessage.getProjectId())) {
         projectMap.get(logMessage.getProjectId()).add(logMessage);
       } else {
@@ -217,24 +219,13 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
     return projectMap;
   }
 
-  private Long getLastMigratedLogId(List<LogMessage> logMessagesWithLaunchId,
-      List<LogMessage> logMessagesWithoutLaunchId) {
+  private Long getLastMigratedLogId(List<LogMessage> logMessages) {
 
-    Long logWithLaunchId;
-    Long logWithoutLaunchId;
-    if (!logMessagesWithLaunchId.isEmpty()) {
-      logWithLaunchId = logMessagesWithLaunchId.get(logMessagesWithLaunchId.size() - 1).getId();
+    if (logMessages.isEmpty()) {
+      return Long.MIN_VALUE;
     } else {
-      logWithLaunchId = Long.MIN_VALUE;
+      return logMessages.get(logMessages.size() - 1).getId();
     }
-    if (!logMessagesWithoutLaunchId.isEmpty()) {
-      logWithoutLaunchId =
-          logMessagesWithoutLaunchId.get(logMessagesWithoutLaunchId.size() - 1).getId();
-    } else {
-      logWithoutLaunchId = Long.MIN_VALUE;
-    }
-
-    return logWithLaunchId.compareTo(logWithoutLaunchId) > 0 ? logWithLaunchId : logWithoutLaunchId;
   }
 
   private void migrateMergedLaunches(Long startLogId) {
