@@ -60,7 +60,8 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
           + "             project_id\n" + "      FROM log l\n"
           + "               JOIN test_item AS retry ON l.item_id = retry.item_id\n"
           + "               JOIN test_item ti ON retry.retry_of = ti.item_id\n"
-          + "      WHERE retry.retry_of IS NOT NULL) AS t2\n" + "ORDER BY id DESC\n";
+          + "      WHERE retry.retry_of IS NOT NULL) AS t2\n"
+          + "ORDER BY id DESC LIMIT :maxLogsNumber\n";
 
   private static final String SELECT_LOGS_BEFORE_ID =
       "SELECT id, log_time, log_message, item_id, launch_id, project_id\n" + "FROM log\n"
