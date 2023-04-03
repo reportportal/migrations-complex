@@ -20,7 +20,9 @@ public class ComplexMigrationsApplication implements ApplicationRunner {
 	}
 
 	@Override
-	public void run(ApplicationArguments args) {
+	public void run(ApplicationArguments args) throws InterruptedException {
+		//Waiting 5 minutes for Elastic to start
+		Thread.sleep(300000);
 		migrationService.migrate();
 	}
 }
