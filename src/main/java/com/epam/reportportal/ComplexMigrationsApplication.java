@@ -9,18 +9,19 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @SpringBootApplication
 public class ComplexMigrationsApplication implements ApplicationRunner {
 
-	private final MigrationService migrationService;
+  private final MigrationService migrationService;
 
-	public ComplexMigrationsApplication(MigrationService migrationService) {
-		this.migrationService = migrationService;
-	}
+  public ComplexMigrationsApplication(MigrationService migrationService) {
+    this.migrationService = migrationService;
+  }
 
-	public static void main(String[] args) {
-		System.exit(SpringApplication.exit(SpringApplication.run(ComplexMigrationsApplication.class, args)));
-	}
+  public static void main(String[] args) {
+    System.exit(
+        SpringApplication.exit(SpringApplication.run(ComplexMigrationsApplication.class, args)));
+  }
 
-	@Override
-	public void run(ApplicationArguments args) {
-		migrationService.migrate();
-	}
+  @Override
+  public void run(ApplicationArguments args) throws InterruptedException {
+    migrationService.migrate();
+  }
 }

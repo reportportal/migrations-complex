@@ -33,6 +33,8 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
   private final JdbcTemplate jdbcTemplate;
   private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 
+  private final String elasticHost;
+
   private static final int DEFAULT_MAX_LOGS_NUMBER = 1000;
   private static final String SELECT_FIRST_ID = "SELECT MIN(id) FROM log";
   private static final String SELECT_ALL_LAUNCH_ID_AFTER_LAUNCH_ID =
@@ -72,7 +74,8 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
   public ElasticMigrationServiceImpl(JdbcTemplate jdbcTemplate,
       SimpleElasticSearchClient simpleElasticSearchClient,
       @Value("${rp.migration.elastic.startDate}") String startDate,
-      @Value("${rp.migration.elastic.logsNumber}") String maxLogsNumberString) {
+      @Value("${rp.migration.elastic.logsNumber}") String maxLogsNumberString,
+      @Value("${rp.elasticsearch.host}") String elasticHost) {
     this.jdbcTemplate = jdbcTemplate;
     int maxLogsNumberValue =
         StringUtils.hasText(maxLogsNumberString) ? Integer.parseInt(maxLogsNumberString) : 0;
@@ -84,11 +87,21 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
     } else {
       startDateTime = null;
     }
+    this.elasticHost = elasticHost;
   }
 
   @Override
   public void migrateLogs() {
 
+    if (!StringUtils.hasText(elasticHost)) {
+      return;
+    }
+    //Sleep in order to ElasticSearch to start
+    try {
+      Thread.sleep(300000);
+    } catch (InterruptedException e) {
+      throw new RuntimeException(e);
+    }
     Long databaseFirstLogId = jdbcTemplate.queryForObject(SELECT_FIRST_ID, Long.class);
     LOGGER.info("Database first log id : {}", databaseFirstLogId);
     if (databaseFirstLogId == null) {
