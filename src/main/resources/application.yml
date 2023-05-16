@@ -1,8 +1,8 @@
 rp:
-#  elasticsearch:
-#    host: http://elasticsearch:9200
-#    username: elastic
-#    password: elastic1q2w3e
+  elasticsearch:
+    host: #http://elasticsearch:9200
+    username: #elastic
+    password: #elastic1q2w3e
   migration:
     elastic:
       #Time before which logs should be migrated
@@ -26,3 +26,15 @@ rp:
     port: 5432
     user: rpuser
     pass: rppass
+
+datastore:
+  type:
+  accessKey:
+  secretKey:
+  endpoint:
+  region:
+  bucketPrefix:
+  defaultBucketName:
+  singleBucketName:
+  secrets:
+    path: keystore

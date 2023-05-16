@@ -3,7 +3,7 @@ package com.epam.reportportal.service.impl;
 import com.epam.reportportal.elastic.SimpleElasticSearchClient;
 import com.epam.reportportal.model.LaunchProjectId;
 import com.epam.reportportal.model.LogMessage;
-import com.epam.reportportal.service.ElasticMigrationService;
+import com.epam.reportportal.service.MigrationService;
 import com.epam.reportportal.utils.LogRowMapper;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -24,7 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 @Service
-public class ElasticMigrationServiceImpl implements ElasticMigrationService {
+public class ElasticMigrationServiceImpl implements MigrationService {
 
   private final int maxLogNumber;
   private final LocalDateTime startDateTime;
@@ -32,6 +32,8 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
   private final SimpleElasticSearchClient elasticSearchClient;
   private final JdbcTemplate jdbcTemplate;
   private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+
+  private final String elasticHost;
 
   private static final int DEFAULT_MAX_LOGS_NUMBER = 1000;
   private static final String SELECT_FIRST_ID = "SELECT MIN(id) FROM log";
@@ -72,7 +74,8 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
   public ElasticMigrationServiceImpl(JdbcTemplate jdbcTemplate,
       SimpleElasticSearchClient simpleElasticSearchClient,
       @Value("${rp.migration.elastic.startDate}") String startDate,
-      @Value("${rp.migration.elastic.logsNumber}") String maxLogsNumberString) {
+      @Value("${rp.migration.elastic.logsNumber}") String maxLogsNumberString,
+      @Value("${rp.elasticsearch.host}") String elasticHost) {
     this.jdbcTemplate = jdbcTemplate;
     int maxLogsNumberValue =
         StringUtils.hasText(maxLogsNumberString) ? Integer.parseInt(maxLogsNumberString) : 0;
@@ -84,11 +87,21 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
     } else {
       startDateTime = null;
     }
+    this.elasticHost = elasticHost;
   }
 
   @Override
-  public void migrateLogs() {
+  public void migrate() {
 
+    if (!StringUtils.hasText(elasticHost)) {
+      return;
+    }
+    //Sleep in order to ElasticSearch to start
+    try {
+      Thread.sleep(300000);
+    } catch (InterruptedException e) {
+      throw new RuntimeException(e);
+    }
     Long databaseFirstLogId = jdbcTemplate.queryForObject(SELECT_FIRST_ID, Long.class);
     LOGGER.info("Database first log id : {}", databaseFirstLogId);
     if (databaseFirstLogId == null) {
