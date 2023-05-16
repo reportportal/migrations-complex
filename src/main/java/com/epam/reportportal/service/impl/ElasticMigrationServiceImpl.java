@@ -3,7 +3,7 @@ package com.epam.reportportal.service.impl;
 import com.epam.reportportal.elastic.SimpleElasticSearchClient;
 import com.epam.reportportal.model.LaunchProjectId;
 import com.epam.reportportal.model.LogMessage;
-import com.epam.reportportal.service.ElasticMigrationService;
+import com.epam.reportportal.service.MigrationService;
 import com.epam.reportportal.utils.LogRowMapper;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -24,7 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 @Service
-public class ElasticMigrationServiceImpl implements ElasticMigrationService {
+public class ElasticMigrationServiceImpl implements MigrationService {
 
   private final int maxLogNumber;
   private final LocalDateTime startDateTime;
@@ -91,7 +91,7 @@ public class ElasticMigrationServiceImpl implements ElasticMigrationService {
   }
 
   @Override
-  public void migrateLogs() {
+  public void migrate() {
 
     if (!StringUtils.hasText(elasticHost)) {
       return;

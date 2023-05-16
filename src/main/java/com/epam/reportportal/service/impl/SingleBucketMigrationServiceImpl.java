@@ -3,7 +3,7 @@ package com.epam.reportportal.service.impl;
 import com.epam.reportportal.model.Attachment;
 import com.epam.reportportal.model.Plugin;
 import com.epam.reportportal.model.User;
-import com.epam.reportportal.service.SingleBucketMigrationService;
+import com.epam.reportportal.service.MigrationService;
 import com.epam.reportportal.utils.AttachmentRowMapper;
 import com.epam.reportportal.utils.PluginRowMapper;
 import com.epam.reportportal.utils.UserRowMapper;
@@ -12,6 +12,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Base64;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -22,6 +25,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.Delete;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectResponse;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
+import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.transfer.s3.S3TransferManager;
 import software.amazon.awssdk.transfer.s3.model.Copy;
 import software.amazon.awssdk.transfer.s3.model.CopyRequest;
@@ -30,9 +39,11 @@ import software.amazon.awssdk.transfer.s3.model.CopyRequest;
  * Service which responsible for migrating attachments from Multi-bucket to Single-bucket.
  */
 @Service
-public class SingleBucketMigrationServiceImpl implements SingleBucketMigrationService {
+public class SingleBucketMigrationServiceImpl implements MigrationService {
 
   private final Logger LOGGER = LoggerFactory.getLogger(this.getClass());
+
+  private static final int BATCH_SIZE = 200000;
 
   public static final String SELECT_ALL_PROJECTS = "SELECT id FROM public.project";
 
@@ -50,7 +61,7 @@ public class SingleBucketMigrationServiceImpl implements SingleBucketMigrationSe
 
   public static final String SELECT_ALL_ATTACHMENTS_BY_PROJECT_ID =
       "SELECT id, file_id, thumbnail_id, project_id FROM "
-          + "public.attachment WHERE project_id = ?";
+          + "public.attachment WHERE project_id = ? ORDER BY id LIMIT " + BATCH_SIZE + " OFFSET ?";
 
   public static final String SELECT_ALL_USERS =
       "SELECT id, attachment, attachment_thumbnail FROM " + "public.users";
@@ -76,6 +87,10 @@ public class SingleBucketMigrationServiceImpl implements SingleBucketMigrationSe
 
   private final String secretsPath;
 
+  private final Boolean removeAfterMigration;
+
+  private final S3AsyncClient s3Client;
+
   private final S3TransferManager transferManager;
 
   private final JdbcTemplate jdbcTemplate;
@@ -84,18 +99,22 @@ public class SingleBucketMigrationServiceImpl implements SingleBucketMigrationSe
       @Value("${datastore.bucketPrefix}") String bucketPrefix,
       @Value("${datastore.defaultBucketName}") String defaultBucketName,
       @Value("${datastore.singleBucketName}") String singleBucketName,
-      @Value("${datastore.secrets.path}") String secretsPath) {
+      @Value("${datastore.secrets.path}") String secretsPath,
+      @Value("#{new Boolean('${datastore.remove.after.migration}')}")
+      Boolean removeAfterMigration) {
     this.jdbcTemplate = jdbcTemplate;
+    this.s3Client = s3Client;
     this.transferManager = S3TransferManager.builder().s3Client(s3Client).build();
     this.bucketPrefix = bucketPrefix;
     this.defaultBucketName = defaultBucketName;
     this.singleBucketName = singleBucketName;
     this.secretsPath = secretsPath;
+    this.removeAfterMigration = removeAfterMigration;
   }
 
   @Transactional
   @Override
-  public void migrateAttachments() {
+  public void migrate() {
     if (!StringUtils.isEmpty(singleBucketName)) {
       migrateProjectData();
       migrateUserPhotos();
@@ -108,14 +127,23 @@ public class SingleBucketMigrationServiceImpl implements SingleBucketMigrationSe
   private void migrateProjectData() {
     List<Long> projects = jdbcTemplate.queryForList(SELECT_ALL_PROJECTS, Long.class);
     for (Long projectId : projects) {
-      List<Attachment> attachments =
-          jdbcTemplate.query(SELECT_ALL_ATTACHMENTS_BY_PROJECT_ID, new AttachmentRowMapper(),
-              projectId
-          );
-      if (attachments.isEmpty()) {
-        continue;
-      }
-      attachments.forEach(this::migrateAttachment);
+      int iteration = 0;
+      int size;
+      do {
+        List<Attachment> attachments =
+            jdbcTemplate.query(SELECT_ALL_ATTACHMENTS_BY_PROJECT_ID, new AttachmentRowMapper(),
+                projectId, iteration * BATCH_SIZE
+            );
+        if (attachments.isEmpty()) {
+          break;
+        }
+        attachments.forEach(this::migrateAttachment);
+        if (removeAfterMigration) {
+          deleteAttachments(attachments, bucketPrefix + projectId);
+        }
+        size = attachments.size();
+        iteration++;
+      } while (size == BATCH_SIZE);
     }
   }
 
@@ -125,10 +153,16 @@ public class SingleBucketMigrationServiceImpl implements SingleBucketMigrationSe
       String attachment = user.getAttachment();
       if (attachment != null) {
         migratePhoto(attachment, user.getId(), UPDATE_USER_PHOTO);
+        if (removeAfterMigration) {
+          deleteFile(cutPath(decode(attachment)), bucketPrefix + USERS_MULTIBUCKET_NAME);
+        }
       }
       String thumbnail = user.getAttachmentThumbnail();
       if (thumbnail != null) {
         migratePhoto(thumbnail, user.getId(), UPDATE_USER_PHOTO_THUMBNAIL);
+      }
+      if (removeAfterMigration) {
+        deleteFile(cutPath(decode(thumbnail)), bucketPrefix + USERS_MULTIBUCKET_NAME);
       }
     }
   }
@@ -148,13 +182,20 @@ public class SingleBucketMigrationServiceImpl implements SingleBucketMigrationSe
       detailsJson.getJSONObject("details").put("id", PLUGINS_PREFIX + pluginPath);
 
       jdbcTemplate.update(UPDATE_PLUGIN_DETAILS, detailsJson.toString(), plugin.getId());
+      if (removeAfterMigration) {
+        deleteFile(pluginPath, defaultBucketName);
+      }
     }
   }
 
   private void migrateIntegrationSecrets() {
-    copyObjectToNewBucket(bucketPrefix + secretsPath, "secret-integration-salt", singleBucketName,
-        SECRETS_PREFIX + "secret-integration-salt"
+    String saltPath = "secret-integration-salt";
+    copyObjectToNewBucket(bucketPrefix + secretsPath, saltPath, singleBucketName,
+        SECRETS_PREFIX + saltPath
     );
+    if (removeAfterMigration) {
+      deleteFile(saltPath, bucketPrefix + secretsPath);
+    }
   }
 
   private void copyObjectToNewBucket(String bucketName, String key, String destinationBucket,
@@ -224,5 +265,41 @@ public class SingleBucketMigrationServiceImpl implements SingleBucketMigrationSe
     );
 
     jdbcTemplate.update(sql, encode(USERS_SINGLEBUCKET_PREFIX + cutPhotoPath), id);
+  }
+
+  private void deleteAttachments(List<Attachment> files, String bucketName) {
+    List<ObjectIdentifier> objectIdentifiers =
+        files.stream().map(Attachment::getFileId).filter(Objects::nonNull)
+            .map(file -> ObjectIdentifier.builder().key(cutPath(decode(file))).build())
+            .collect(Collectors.toList());
+    objectIdentifiers.addAll(files.stream().map(Attachment::getThumbnailId).filter(Objects::nonNull)
+        .map(thumbnail -> ObjectIdentifier.builder().key(cutPath(decode(thumbnail))).build())
+        .collect(Collectors.toList()));
+    DeleteObjectsRequest deleteObjectsRequest = DeleteObjectsRequest.builder().bucket(bucketName)
+        .delete(Delete.builder().objects(objectIdentifiers).build()).build();
+
+    CompletableFuture<DeleteObjectsResponse> response =
+        s3Client.deleteObjects(deleteObjectsRequest);
+
+    LOGGER.info("Deleted attachments for {} : {}", bucketName, response.handle((file, ex) -> {
+      if (ex != null) {
+        LOGGER.warn("Exception occurred during deletion : {}", ex.getMessage());
+      }
+      return file;
+    }).join().hasDeleted());
+  }
+
+  private void deleteFile(String filePath, String bucketName) {
+    DeleteObjectRequest deleteObjectRequest =
+        DeleteObjectRequest.builder().bucket(bucketName).key(filePath).build();
+
+    CompletableFuture<DeleteObjectResponse> response = s3Client.deleteObject(deleteObjectRequest);
+
+    LOGGER.info("Deleted {} : {}", filePath, response.handle((file, ex) -> {
+      if (ex != null) {
+        LOGGER.warn("Exception occurred during deletion : {}", ex.getMessage());
+      }
+      return file;
+    }).join().sdkHttpResponse().isSuccessful());
   }
 }

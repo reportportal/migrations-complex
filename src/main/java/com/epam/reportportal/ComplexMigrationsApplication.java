@@ -1,6 +1,6 @@
 package com.epam.reportportal;
 
-import com.epam.reportportal.service.MigrationService;
+import com.epam.reportportal.service.impl.ComplexMigrationService;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
@@ -9,9 +9,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @SpringBootApplication
 public class ComplexMigrationsApplication implements ApplicationRunner {
 
-  private final MigrationService migrationService;
+  private final ComplexMigrationService migrationService;
 
-  public ComplexMigrationsApplication(MigrationService migrationService) {
+  public ComplexMigrationsApplication(ComplexMigrationService migrationService) {
     this.migrationService = migrationService;
   }
 
