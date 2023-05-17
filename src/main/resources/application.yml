@@ -38,3 +38,6 @@ datastore:
   singleBucketName:
   secrets:
     path: keystore
+  remove:
+    after:
+      migration: false

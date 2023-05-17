@@ -41,7 +41,7 @@ import software.amazon.awssdk.transfer.s3.model.CopyRequest;
 @Service
 public class SingleBucketMigrationServiceImpl implements MigrationService {
 
-  private final Logger LOGGER = LoggerFactory.getLogger(this.getClass());
+  private final Logger logger = LoggerFactory.getLogger(this.getClass());
 
   private static final int BATCH_SIZE = 200000;
 
@@ -120,7 +120,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       migrateUserPhotos();
       migratePlugins();
       migrateIntegrationSecrets();
-      LOGGER.info("Migration to single bucket is completed.");
+      logger.info("Migration to single bucket is completed.");
     }
   }
 
@@ -176,6 +176,10 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       JSONObject detailsJson = new JSONObject(plugin.getDetails());
       String pluginPath = detailsJson.getJSONObject("details").getString("id");
 
+      //Check if plugin is already migrated
+      if (PLUGINS_PREFIX.equals(getPathFirstPart(pluginPath) + "/")) {
+        return;
+      }
       copyObjectToNewBucket(
           defaultBucketName, pluginPath, singleBucketName, PLUGINS_PREFIX + pluginPath);
 
@@ -210,7 +214,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
     copy.completionFuture().handle((file, ex) -> {
       if (ex != null) {
-        LOGGER.warn("Exception occurred during copy : {}", ex.getMessage());
+        logger.warn("Exception occurred during copy : {}", ex.getMessage());
       }
       return file;
     }).join();
@@ -227,21 +231,14 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     }
   }
 
-  private String decode(String data) {
-    return StringUtils.isEmpty(data) ? data :
-        new String(Base64.getUrlDecoder().decode(data), StandardCharsets.UTF_8);
-  }
-
-  private String encode(String data) {
-    return StringUtils.isEmpty(data) ? data :
-        new String(Base64.getUrlEncoder().encode(data.getBytes(StandardCharsets.UTF_8)),
-            StandardCharsets.UTF_8
-        );
-  }
-
   private void moveAttachmentAndUpdatePath(Attachment attachment, String encodedFilePath,
       String sql) {
     String filePath = decode(encodedFilePath);
+
+    //Check if file is already migrated
+    if (PROJECT_PREFIX.equals(getPathFirstPart(filePath) + "/")) {
+      return;
+    }
     String cutFilePath = cutPath(filePath);
     String singleBucketFilePath = PROJECT_PREFIX + filePath;
     copyObjectToNewBucket(bucketPrefix + attachment.getProjectId(), cutFilePath, singleBucketName,
@@ -250,13 +247,13 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     jdbcTemplate.update(sql, encode(singleBucketFilePath), attachment.getId());
   }
 
-  private String cutPath(String filePath) {
-    Path path = Paths.get(filePath);
-    return String.valueOf(path.subpath(1, path.getNameCount()));
-  }
-
   private void migratePhoto(String encodedPath, Long id, String sql) {
     String decodedPhotoPath = decode(encodedPath);
+
+    //Check if photo is already migrated
+    if (USERS_SINGLEBUCKET_PREFIX.equals(getPathFirstPart(decodedPhotoPath) + "/")) {
+      return;
+    }
 
     String cutPhotoPath = cutPath(decodedPhotoPath);
 
@@ -281,9 +278,9 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     CompletableFuture<DeleteObjectsResponse> response =
         s3Client.deleteObjects(deleteObjectsRequest);
 
-    LOGGER.info("Deleted attachments for {} : {}", bucketName, response.handle((file, ex) -> {
+    logger.info("Deleted attachments for {} : {}", bucketName, response.handle((file, ex) -> {
       if (ex != null) {
-        LOGGER.warn("Exception occurred during deletion : {}", ex.getMessage());
+        logger.warn("Exception occurred during deletion : {}", ex.getMessage());
       }
       return file;
     }).join().hasDeleted());
@@ -295,11 +292,33 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
     CompletableFuture<DeleteObjectResponse> response = s3Client.deleteObject(deleteObjectRequest);
 
-    LOGGER.info("Deleted {} : {}", filePath, response.handle((file, ex) -> {
+    logger.info("Deleted {} : {}", filePath, response.handle((file, ex) -> {
       if (ex != null) {
-        LOGGER.warn("Exception occurred during deletion : {}", ex.getMessage());
+        logger.warn("Exception occurred during deletion : {}", ex.getMessage());
       }
       return file;
     }).join().sdkHttpResponse().isSuccessful());
+  }
+
+  private String getPathFirstPart(String filePath) {
+    Path path = Paths.get(filePath);
+    return String.valueOf(path.subpath(0, 1));
+  }
+
+  private String cutPath(String filePath) {
+    Path path = Paths.get(filePath);
+    return String.valueOf(path.subpath(1, path.getNameCount()));
+  }
+
+  private String decode(String data) {
+    return StringUtils.isEmpty(data) ? data :
+        new String(Base64.getUrlDecoder().decode(data), StandardCharsets.UTF_8);
+  }
+
+  private String encode(String data) {
+    return StringUtils.isEmpty(data) ? data :
+        new String(Base64.getUrlEncoder().encode(data.getBytes(StandardCharsets.UTF_8)),
+            StandardCharsets.UTF_8
+        );
   }
 }
