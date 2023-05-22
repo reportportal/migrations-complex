@@ -25,11 +25,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
+import software.amazon.awssdk.services.s3.model.CreateBucketResponse;
 import software.amazon.awssdk.services.s3.model.Delete;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectResponse;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
+import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
+import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.transfer.s3.S3TransferManager;
 import software.amazon.awssdk.transfer.s3.model.Copy;
@@ -112,10 +116,25 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     this.removeAfterMigration = removeAfterMigration;
   }
 
+  //Minio Multibucket + migration
+  //Minio Singlebucket
+
   @Transactional
   @Override
   public void migrate() {
     if (!StringUtils.isEmpty(singleBucketName)) {
+
+      if (!bucketExists(singleBucketName)) {
+        CompletableFuture<CreateBucketResponse> createBucket =
+            s3Client.createBucket(CreateBucketRequest.builder().bucket(singleBucketName).build());
+
+        CreateBucketResponse createBucketResponse = createBucket.join();
+        if (createBucketResponse.sdkHttpResponse().isSuccessful()) {
+          logger.info("Single bucket {} is created", singleBucketName);
+        } else {
+          logger.info("Single bucket {} isn't created", singleBucketName);
+        }
+      }
       migrateProjectData();
       migrateUserPhotos();
       migratePlugins();
@@ -144,7 +163,9 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         size = attachments.size();
         iteration++;
       } while (size == BATCH_SIZE);
+      logger.info("Migration for project {} is completed", projectId);
     }
+    logger.info("Migration of project attachments is completed");
   }
 
   private void migrateUserPhotos() {
@@ -165,6 +186,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         deleteFile(cutPath(decode(thumbnail)), bucketPrefix + USERS_MULTIBUCKET_NAME);
       }
     }
+    logger.info("Migration of user photos is completed");
   }
 
   private void migratePlugins() {
@@ -190,6 +212,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         deleteFile(pluginPath, defaultBucketName);
       }
     }
+    logger.info("Migration of plugins is completed");
   }
 
   private void migrateIntegrationSecrets() {
@@ -200,6 +223,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     if (removeAfterMigration) {
       deleteFile(saltPath, bucketPrefix + secretsPath);
     }
+    logger.info("Migrations of integration secrets is completed");
   }
 
   private void copyObjectToNewBucket(String bucketName, String key, String destinationBucket,
@@ -320,5 +344,18 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         new String(Base64.getUrlEncoder().encode(data.getBytes(StandardCharsets.UTF_8)),
             StandardCharsets.UTF_8
         );
+  }
+
+  private boolean bucketExists(String bucketName){
+    HeadBucketRequest headBucketRequest = HeadBucketRequest.builder()
+        .bucket(bucketName)
+        .build();
+
+    try {
+      s3Client.headBucket(headBucketRequest).join();
+      return true;
+    } catch (NoSuchBucketException e) {
+      return false;
+    }
   }
 }
