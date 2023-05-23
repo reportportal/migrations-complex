@@ -135,10 +135,10 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
           logger.info("Single bucket {} isn't created", singleBucketName);
         }
       }
-      migrateProjectData();
-      migrateUserPhotos();
-      migratePlugins();
       migrateIntegrationSecrets();
+      migratePlugins();
+      migrateUserPhotos();
+      migrateProjectData();
       logger.info("Migration to single bucket is completed.");
     }
   }
