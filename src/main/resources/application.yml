@@ -32,9 +32,9 @@ datastore:
   accessKey:
   secretKey:
   endpoint:
-  region:
-  bucketPrefix:
-  defaultBucketName:
+  region: eu-west-1
+  bucketPrefix: prj-
+  defaultBucketName: rp-bucket
   singleBucketName:
   secrets:
     path: keystore
