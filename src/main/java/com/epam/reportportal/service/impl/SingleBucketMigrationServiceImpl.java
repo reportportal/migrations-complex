@@ -116,9 +116,6 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     this.removeAfterMigration = removeAfterMigration;
   }
 
-  //Minio Multibucket + migration
-  //Minio Singlebucket
-
   @Transactional
   @Override
   public void migrate() {
