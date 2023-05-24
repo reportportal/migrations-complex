@@ -181,9 +181,9 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       String thumbnail = user.getAttachmentThumbnail();
       if (StringUtils.isNotBlank(thumbnail)) {
         migratePhoto(thumbnail, user.getId(), UPDATE_USER_PHOTO_THUMBNAIL);
-      }
-      if (removeAfterMigration) {
-        deleteFile(cutPath(decode(thumbnail)), bucketPrefix + USERS_MULTIBUCKET_NAME);
+        if (removeAfterMigration) {
+          deleteFile(cutPath(decode(thumbnail)), bucketPrefix + USERS_MULTIBUCKET_NAME);
+        }
       }
     }
     if (removeAfterMigration) {
@@ -316,12 +316,17 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     CompletableFuture<DeleteObjectsResponse> response =
         s3Client.deleteObjects(deleteObjectsRequest);
 
-    logger.info("Deleted attachments for {} : {}", bucketName, response.handle((file, ex) -> {
+    DeleteObjectsResponse deleteObjectsResponse = response.handle((file, ex) -> {
       if (ex != null) {
         logger.warn("Exception occurred during deletion : {}", ex.getMessage());
       }
       return file;
-    }).join().hasDeleted());
+    }).join();
+
+    if (deleteObjectsResponse != null) {
+      logger.info(
+          "Deleted attachments for {} : {}", bucketName, deleteObjectsResponse.hasDeleted());
+    }
   }
 
   private void deleteFile(String filePath, String bucketName) {
@@ -330,12 +335,17 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
     CompletableFuture<DeleteObjectResponse> response = s3Client.deleteObject(deleteObjectRequest);
 
-    logger.info("Deleted {} : {}", filePath, response.handle((file, ex) -> {
+    DeleteObjectResponse deleteObjectResponse = response.handle((file, ex) -> {
       if (ex != null) {
         logger.warn("Exception occurred during deletion : {}", ex.getMessage());
       }
       return file;
-    }).join().sdkHttpResponse().isSuccessful());
+    }).join();
+
+    if (deleteObjectResponse != null && deleteObjectResponse.sdkHttpResponse() != null) {
+      logger.info(
+          "Deleted {} : {}", filePath, deleteObjectResponse.sdkHttpResponse().isSuccessful());
+    }
   }
 
   private String getPathFirstPart(String filePath) {
