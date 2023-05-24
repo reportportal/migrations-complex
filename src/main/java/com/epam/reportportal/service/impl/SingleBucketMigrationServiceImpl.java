@@ -28,12 +28,12 @@ import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 import software.amazon.awssdk.services.s3.model.CreateBucketResponse;
 import software.amazon.awssdk.services.s3.model.Delete;
+import software.amazon.awssdk.services.s3.model.DeleteBucketRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectResponse;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
-import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.transfer.s3.S3TransferManager;
 import software.amazon.awssdk.transfer.s3.model.Copy;
@@ -116,9 +116,6 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     this.removeAfterMigration = removeAfterMigration;
   }
 
-  //Minio Multibucket + migration
-  //Minio Singlebucket
-
   @Transactional
   @Override
   public void migrate() {
@@ -163,6 +160,9 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         size = attachments.size();
         iteration++;
       } while (size == BATCH_SIZE);
+      if (removeAfterMigration) {
+        deleteBucket(bucketPrefix + projectId);
+      }
       logger.info("Migration for project {} is completed", projectId);
     }
     logger.info("Migration of project attachments is completed");
@@ -172,19 +172,22 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     List<User> users = jdbcTemplate.query(SELECT_ALL_USERS, new UserRowMapper());
     for (User user : users) {
       String attachment = user.getAttachment();
-      if (attachment != null) {
+      if (StringUtils.isNotBlank(attachment)) {
         migratePhoto(attachment, user.getId(), UPDATE_USER_PHOTO);
         if (removeAfterMigration) {
           deleteFile(cutPath(decode(attachment)), bucketPrefix + USERS_MULTIBUCKET_NAME);
         }
       }
       String thumbnail = user.getAttachmentThumbnail();
-      if (thumbnail != null) {
+      if (StringUtils.isNotBlank(thumbnail)) {
         migratePhoto(thumbnail, user.getId(), UPDATE_USER_PHOTO_THUMBNAIL);
       }
       if (removeAfterMigration) {
         deleteFile(cutPath(decode(thumbnail)), bucketPrefix + USERS_MULTIBUCKET_NAME);
       }
+    }
+    if (removeAfterMigration) {
+      deleteBucket(bucketPrefix + USERS_MULTIBUCKET_NAME);
     }
     logger.info("Migration of user photos is completed");
   }
@@ -212,16 +215,27 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         deleteFile(pluginPath, defaultBucketName);
       }
     }
+    if (removeAfterMigration) {
+      deleteBucket(defaultBucketName);
+    }
     logger.info("Migration of plugins is completed");
   }
 
   private void migrateIntegrationSecrets() {
     String saltPath = "secret-integration-salt";
+    String migrationPath = "migration";
     copyObjectToNewBucket(bucketPrefix + secretsPath, saltPath, singleBucketName,
         SECRETS_PREFIX + saltPath
     );
     if (removeAfterMigration) {
       deleteFile(saltPath, bucketPrefix + secretsPath);
+    }
+    copyObjectToNewBucket(bucketPrefix + secretsPath, migrationPath, singleBucketName,
+        SECRETS_PREFIX + migrationPath
+    );
+    if (removeAfterMigration) {
+      deleteFile(migrationPath, bucketPrefix + secretsPath);
+      deleteBucket(bucketPrefix + secretsPath);
     }
     logger.info("Migrations of integration secrets is completed");
   }
@@ -346,16 +360,25 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         );
   }
 
-  private boolean bucketExists(String bucketName){
-    HeadBucketRequest headBucketRequest = HeadBucketRequest.builder()
-        .bucket(bucketName)
-        .build();
+  private boolean bucketExists(String bucketName) {
+    HeadBucketRequest headBucketRequest = HeadBucketRequest.builder().bucket(bucketName).build();
 
     try {
       s3Client.headBucket(headBucketRequest).join();
       return true;
-    } catch (NoSuchBucketException e) {
+    } catch (Exception e) {
       return false;
+    }
+  }
+
+  private void deleteBucket(String bucketName) {
+    DeleteBucketRequest deleteBucketRequest =
+        DeleteBucketRequest.builder().bucket(bucketName).build();
+
+    try {
+      s3Client.deleteBucket(deleteBucketRequest);
+    } catch (Exception e) {
+      logger.warn("Bucket {} isn't delete due to exception {}", bucketName, e.getMessage());
     }
   }
 }
