@@ -199,7 +199,11 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         continue;
       }
       JSONObject detailsJson = new JSONObject(plugin.getDetails());
+      if (!detailsJson.getJSONObject("details").has("id")){
+        continue;
+      }
       String pluginPath = detailsJson.getJSONObject("details").getString("id");
+
 
       //Check if plugin is already migrated
       if (PLUGINS_PREFIX.equals(getPathFirstPart(pluginPath) + "/")) {
