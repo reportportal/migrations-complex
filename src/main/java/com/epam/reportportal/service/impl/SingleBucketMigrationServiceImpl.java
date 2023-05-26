@@ -7,6 +7,7 @@ import com.epam.reportportal.service.MigrationService;
 import com.epam.reportportal.utils.AttachmentRowMapper;
 import com.epam.reportportal.utils.PluginRowMapper;
 import com.epam.reportportal.utils.UserRowMapper;
+import com.google.common.collect.Iterables;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -143,6 +144,11 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   private void migrateProjectData() {
     List<Long> projects = jdbcTemplate.queryForList(SELECT_ALL_PROJECTS, Long.class);
     for (Long projectId : projects) {
+      if (!bucketExists(bucketPrefix + projectId)){
+        logger.warn("Bucket {} doesn't exist", bucketPrefix + projectId);
+        continue;
+      }
+
       int iteration = 0;
       int size;
       do {
@@ -199,11 +205,10 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         continue;
       }
       JSONObject detailsJson = new JSONObject(plugin.getDetails());
-      if (!detailsJson.getJSONObject("details").has("id")){
+      if (!detailsJson.getJSONObject("details").has("id")) {
         continue;
       }
       String pluginPath = detailsJson.getJSONObject("details").getString("id");
-
 
       //Check if plugin is already migrated
       if (PLUGINS_PREFIX.equals(getPathFirstPart(pluginPath) + "/")) {
@@ -314,22 +319,24 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     objectIdentifiers.addAll(files.stream().map(Attachment::getThumbnailId).filter(Objects::nonNull)
         .map(thumbnail -> ObjectIdentifier.builder().key(cutPath(decode(thumbnail))).build())
         .collect(Collectors.toList()));
-    DeleteObjectsRequest deleteObjectsRequest = DeleteObjectsRequest.builder().bucket(bucketName)
-        .delete(Delete.builder().objects(objectIdentifiers).build()).build();
+    for (List<ObjectIdentifier> partition : Iterables.partition(objectIdentifiers, 1000)) {
+      DeleteObjectsRequest deleteObjectsRequest = DeleteObjectsRequest.builder().bucket(bucketName)
+          .delete(Delete.builder().objects(partition).build()).build();
 
-    CompletableFuture<DeleteObjectsResponse> response =
-        s3Client.deleteObjects(deleteObjectsRequest);
+      CompletableFuture<DeleteObjectsResponse> response =
+          s3Client.deleteObjects(deleteObjectsRequest);
 
-    DeleteObjectsResponse deleteObjectsResponse = response.handle((file, ex) -> {
-      if (ex != null) {
-        logger.warn("Exception occurred during deletion : {}", ex.getMessage());
+      DeleteObjectsResponse deleteObjectsResponse = response.handle((file, ex) -> {
+        if (ex != null) {
+          logger.warn("Exception occurred during deletion : {}", ex.getMessage());
+        }
+        return file;
+      }).join();
+
+      if (deleteObjectsResponse != null) {
+        logger.info(
+            "Deleted attachments for {} : {}", bucketName, deleteObjectsResponse.hasDeleted());
       }
-      return file;
-    }).join();
-
-    if (deleteObjectsResponse != null) {
-      logger.info(
-          "Deleted attachments for {} : {}", bucketName, deleteObjectsResponse.hasDeleted());
     }
   }
 
