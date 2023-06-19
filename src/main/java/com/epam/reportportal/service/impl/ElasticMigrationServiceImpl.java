@@ -17,6 +17,8 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.annotation.Order;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -24,27 +26,18 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 @Service
+@Order(2)
+@ConditionalOnProperty(value = "rp.elastic.migration", havingValue = "true")
 public class ElasticMigrationServiceImpl implements MigrationService {
-
-  private final int maxLogNumber;
-  private final LocalDateTime startDateTime;
-  private final Logger LOGGER = LoggerFactory.getLogger(this.getClass());
-  private final SimpleElasticSearchClient elasticSearchClient;
-  private final JdbcTemplate jdbcTemplate;
-  private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
-
-  private final String elasticHost;
 
   private static final int DEFAULT_MAX_LOGS_NUMBER = 1000;
   private static final String SELECT_FIRST_ID = "SELECT MIN(id) FROM log";
   private static final String SELECT_ALL_LAUNCH_ID_AFTER_LAUNCH_ID =
       "SELECT id AS launch_id, project_id FROM launch WHERE id > ?";
-
   private static final String SELECT_ALL_TEST_ITEMS_FROM_LAUNCH =
       "SELECT test_item.item_id FROM test_item WHERE launch_id = ?";
   private static final String SELECT_LOG_ID_CLOSEST_TO_TIME =
       "SELECT id FROM log WHERE log_time >= :time ORDER BY id LIMIT 1";
-
   private static final String SELECT_LAUNCH_ID_BY_LOG_ID =
       "SELECT test_item.launch_id FROM test_item JOIN log ON test_item.item_id = log.item_id "
           + "WHERE log.id = ?";
@@ -70,12 +63,17 @@ public class ElasticMigrationServiceImpl implements MigrationService {
           + "JOIN test_item ti ON l.item_id = ti.item_id WHERE retry_of IS NOT NULL "
           + "AND retry_of IN (SELECT item_id FROM test_item "
           + "WHERE l.id < :id) ORDER BY id DESC LIMIT :maxLogNumber";
+  private final int maxLogNumber;
+  private final LocalDateTime startDateTime;
+  private final Logger LOGGER = LoggerFactory.getLogger(this.getClass());
+  private final SimpleElasticSearchClient elasticSearchClient;
+  private final JdbcTemplate jdbcTemplate;
+  private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 
   public ElasticMigrationServiceImpl(JdbcTemplate jdbcTemplate,
       SimpleElasticSearchClient simpleElasticSearchClient,
       @Value("${rp.migration.elastic.startDate}") String startDate,
-      @Value("${rp.migration.elastic.logsNumber}") String maxLogsNumberString,
-      @Value("${rp.elasticsearch.host}") String elasticHost) {
+      @Value("${rp.migration.elastic.logsNumber}") String maxLogsNumberString) {
     this.jdbcTemplate = jdbcTemplate;
     int maxLogsNumberValue =
         StringUtils.hasText(maxLogsNumberString) ? Integer.parseInt(maxLogsNumberString) : 0;
@@ -87,15 +85,10 @@ public class ElasticMigrationServiceImpl implements MigrationService {
     } else {
       startDateTime = null;
     }
-    this.elasticHost = elasticHost;
   }
 
   @Override
   public void migrate() {
-
-    if (!StringUtils.hasText(elasticHost)) {
-      return;
-    }
     //Sleep in order to ElasticSearch to start
     try {
       Thread.sleep(300000);

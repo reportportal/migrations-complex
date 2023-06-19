@@ -10,6 +10,12 @@ rp:
       startDate:
       #Maximum number of logs migrated at once
       logsNumber:
+  token:
+    migration: false
+  singlebucket:
+    migration: false
+  elastic:
+    migration: false
 
   datasource:
     type: com.zaxxer.hikari.HikariDataSource
