@@ -13,6 +13,7 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 
 @Configuration
+@ConditionalOnProperty(name = "rp.singlebucket.migration", havingValue = "true")
 public class DataStorageConfiguration {
 
   @Bean
@@ -24,8 +25,7 @@ public class DataStorageConfiguration {
     return S3AsyncClient.crtBuilder().credentialsProvider(
             StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretKey)))
         .targetThroughputInGbps(20.0).minimumPartSizeInBytes(8 * MB).forcePathStyle(true)
-        .region(Region.of(region))
-        .endpointOverride(URI.create(endpoint)).build();
+        .region(Region.of(region)).endpointOverride(URI.create(endpoint)).build();
   }
 
   @Bean

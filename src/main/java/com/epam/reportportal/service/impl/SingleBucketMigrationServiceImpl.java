@@ -21,6 +21,8 @@ import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.annotation.Order;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,48 +46,34 @@ import software.amazon.awssdk.transfer.s3.model.CopyRequest;
  * Service which responsible for migrating attachments from Multi-bucket to Single-bucket.
  */
 @Service
+@Order(3)
+@ConditionalOnProperty(name = "rp.singlebucket.migration", havingValue = "true")
 public class SingleBucketMigrationServiceImpl implements MigrationService {
 
-  private final Logger logger = LoggerFactory.getLogger(this.getClass());
-
-  private static final int BATCH_SIZE = 200000;
-
   public static final String SELECT_ALL_PROJECTS = "SELECT id FROM public.project";
-
   public static final String PROJECT_PREFIX = "project-data/";
-
   public static final String USERS_MULTIBUCKET_NAME = "users";
-
   public static final String USERS_SINGLEBUCKET_PREFIX = "user-data/";
-
   public static final String PLUGINS_PREFIX = "plugins/";
-
   public static final String SECRETS_PREFIX = "integration-secrets/";
-
   public static final String SELECT_ALL_PLUGINS = "SELECT id, details FROM integration_type";
-
+  public static final String SELECT_ALL_USERS =
+      "SELECT id, attachment, attachment_thumbnail FROM " + "public.users";
+  public static final String UPDATE_ATTACHMENT_FILE_ID =
+      "UPDATE public.attachment SET " + "file_id = ? WHERE id = ?";
+  public static final String UPDATE_ATTACHMENT_THUMBNAIL_ID =
+      "UPDATE public.attachment SET " + "thumbnail_id = ? WHERE id = ?";
+  public static final String UPDATE_USER_PHOTO =
+      "UPDATE public.users SET attachment = ? " + "WHERE id = ?";
+  public static final String UPDATE_USER_PHOTO_THUMBNAIL =
+      "UPDATE public.users SET attachment_thumbnail = ? " + "WHERE id = ?";
+  public static final String UPDATE_PLUGIN_DETAILS =
+      "UPDATE public.integration_type SET details = ?::JSONB WHERE id = ?";
+  private static final int BATCH_SIZE = 200000;
   public static final String SELECT_ALL_ATTACHMENTS_BY_PROJECT_ID =
       "SELECT id, file_id, thumbnail_id, project_id FROM "
           + "public.attachment WHERE project_id = ? ORDER BY id LIMIT " + BATCH_SIZE + " OFFSET ?";
-
-  public static final String SELECT_ALL_USERS =
-      "SELECT id, attachment, attachment_thumbnail FROM " + "public.users";
-
-  public static final String UPDATE_ATTACHMENT_FILE_ID =
-      "UPDATE public.attachment SET " + "file_id = ? WHERE id = ?";
-
-  public static final String UPDATE_ATTACHMENT_THUMBNAIL_ID =
-      "UPDATE public.attachment SET " + "thumbnail_id = ? WHERE id = ?";
-
-  public static final String UPDATE_USER_PHOTO =
-      "UPDATE public.users SET attachment = ? " + "WHERE id = ?";
-
-  public static final String UPDATE_USER_PHOTO_THUMBNAIL =
-      "UPDATE public.users SET attachment_thumbnail = ? " + "WHERE id = ?";
-
-  public static final String UPDATE_PLUGIN_DETAILS =
-      "UPDATE public.integration_type SET details = ?::JSONB WHERE id = ?";
-
+  private final Logger logger = LoggerFactory.getLogger(this.getClass());
   private final String bucketPrefix;
   private final String defaultBucketName;
   private final String singleBucketName;
@@ -144,7 +132,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   private void migrateProjectData() {
     List<Long> projects = jdbcTemplate.queryForList(SELECT_ALL_PROJECTS, Long.class);
     for (Long projectId : projects) {
-      if (!bucketExists(bucketPrefix + projectId)){
+      if (!bucketExists(bucketPrefix + projectId)) {
         logger.warn("Bucket {} doesn't exist", bucketPrefix + projectId);
         continue;
       }
