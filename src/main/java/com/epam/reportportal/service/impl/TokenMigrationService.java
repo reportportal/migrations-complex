@@ -32,6 +32,9 @@ public class TokenMigrationService implements MigrationService {
       "SELECT token_id, user_id FROM public.oauth_access_token";
   private static final String INSERT_API_KEYS =
       "INSERT INTO public.api_keys (name, hash, created_at, user_id) VALUES (?, ?, ?, ?)";
+
+  private static final String DROP_OAUTH_ACCESS_TOKEN_TABLE =
+      "DROP TABLE public.oauth_access_token";
   private final JdbcTemplate jdbcTemplate;
 
   @Autowired
@@ -66,6 +69,9 @@ public class TokenMigrationService implements MigrationService {
         "Finished token migration. {} access tokens have been migrated to API keys.",
         apiKeys.size()
     );
+
+    jdbcTemplate.execute(DROP_OAUTH_ACCESS_TOKEN_TABLE);
+    logger.info("Dropped the oauth_access_token table.");
   }
 
   private ApiKey createApiKeyFromAccessToken(AccessToken token) {
