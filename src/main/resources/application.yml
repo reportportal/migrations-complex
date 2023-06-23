@@ -16,6 +16,9 @@ rp:
     migration: false
   elastic:
     migration: false
+  minio:
+    s3:
+      migration: false
 
   datasource:
     type: com.zaxxer.hikari.HikariDataSource
