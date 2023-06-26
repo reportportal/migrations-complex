@@ -4,6 +4,7 @@ import com.epam.reportportal.model.AccessToken;
 import com.epam.reportportal.model.ApiKey;
 import com.epam.reportportal.service.MigrationService;
 import com.epam.reportportal.utils.AccessTokenRowMapper;
+import com.epam.reportportal.utils.MigrationUtils;
 import com.google.common.io.BaseEncoding;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -44,7 +45,7 @@ public class TokenMigrationService implements MigrationService {
 
   @Override
   public void migrate() {
-    logger.info("Starting token migration...");
+    MigrationUtils.startLog("old token migration");
     List<AccessToken> tokens = jdbcTemplate.query(SELECT_ACCESS_TOKENS, new AccessTokenRowMapper());
     List<ApiKey> apiKeys = new ArrayList<>();
     for (AccessToken token : tokens) {
@@ -72,6 +73,7 @@ public class TokenMigrationService implements MigrationService {
 
     jdbcTemplate.execute(DROP_OAUTH_ACCESS_TOKEN_TABLE);
     logger.info("Dropped the oauth_access_token table.");
+    MigrationUtils.endLog("old token migration");
   }
 
   private ApiKey createApiKeyFromAccessToken(AccessToken token) {

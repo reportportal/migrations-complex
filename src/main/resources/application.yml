@@ -31,7 +31,6 @@ rp:
   db:
     url: jdbc:postgresql://${rp.db.host}:${rp.db.port}/${rp.db.name}
     name: reportportal
-    host: localhost
     port: 5432
     user: rpuser
     pass: rppass

@@ -5,6 +5,7 @@ import com.epam.reportportal.model.Plugin;
 import com.epam.reportportal.model.User;
 import com.epam.reportportal.service.MigrationService;
 import com.epam.reportportal.utils.AttachmentRowMapper;
+import com.epam.reportportal.utils.MigrationUtils;
 import com.epam.reportportal.utils.PluginRowMapper;
 import com.epam.reportportal.utils.UserRowMapper;
 import com.google.common.collect.Iterables;
@@ -108,6 +109,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   @Transactional
   @Override
   public void migrate() {
+    MigrationUtils.startLog("migration from multi-bucket to single-bucket");
     if (!StringUtils.isEmpty(singleBucketName)) {
 
       if (!bucketExists(singleBucketName)) {
@@ -125,8 +127,8 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       migratePlugins();
       migrateUserPhotos();
       migrateProjectData();
-      logger.info("Migration to single bucket is completed.");
     }
+    MigrationUtils.endLog("migration from multi-bucket to single-bucket");
   }
 
   private void migrateProjectData() {
@@ -189,33 +191,64 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   private void migratePlugins() {
     List<Plugin> pluginsDetails = jdbcTemplate.query(SELECT_ALL_PLUGINS, new PluginRowMapper());
     for (Plugin plugin : pluginsDetails) {
-      if (StringUtils.isEmpty(plugin.getDetails())) {
+      String pluginPath = getPluginPath(plugin);
+      if (pluginPath == null) {
         continue;
       }
-      JSONObject detailsJson = new JSONObject(plugin.getDetails());
-      if (!detailsJson.getJSONObject("details").has("id")) {
-        continue;
-      }
-      String pluginPath = detailsJson.getJSONObject("details").getString("id");
 
-      //Check if plugin is already migrated
-      if (PLUGINS_PREFIX.equals(getPathFirstPart(pluginPath) + "/")) {
+      if (isPluginAlreadyMigrated(pluginPath)) {
         return;
       }
-      copyObjectToNewBucket(
-          defaultBucketName, pluginPath, singleBucketName, PLUGINS_PREFIX + pluginPath);
 
-      detailsJson.getJSONObject("details").put("id", PLUGINS_PREFIX + pluginPath);
-
-      jdbcTemplate.update(UPDATE_PLUGIN_DETAILS, detailsJson.toString(), plugin.getId());
-      if (removeAfterMigration) {
-        deleteFile(pluginPath, defaultBucketName);
+      String sourceBucket = getSourceBucketForMigration();
+      if (sourceBucket != null) {
+        migratePlugin(plugin, pluginPath, sourceBucket);
       }
     }
+
     if (removeAfterMigration) {
       deleteBucket(defaultBucketName);
+      deleteBucket(bucketPrefix + defaultBucketName);
     }
     logger.info("Migration of plugins is completed");
+  }
+
+  private String getPluginPath(Plugin plugin) {
+    if (StringUtils.isEmpty(plugin.getDetails())) {
+      return null;
+    }
+    JSONObject detailsJson = new JSONObject(plugin.getDetails());
+    if (!detailsJson.getJSONObject("details").has("id")) {
+      return null;
+    }
+    return detailsJson.getJSONObject("details").getString("id");
+  }
+
+  private boolean isPluginAlreadyMigrated(String pluginPath) {
+    return PLUGINS_PREFIX.equals(getPathFirstPart(pluginPath) + "/");
+  }
+
+  private String getSourceBucketForMigration() {
+    //For versions newer than 5.7.4
+    if (bucketExists(defaultBucketName)) {
+      return defaultBucketName;
+      //For versions <= 5.7.4
+    } else if (bucketExists(bucketPrefix + defaultBucketName)) {
+      return bucketPrefix + defaultBucketName;
+    }
+    return null;
+  }
+
+  private void migratePlugin(Plugin plugin, String pluginPath, String sourceBucket) {
+    copyObjectToNewBucket(sourceBucket, pluginPath, singleBucketName, PLUGINS_PREFIX + pluginPath);
+
+    JSONObject detailsJson = new JSONObject(plugin.getDetails());
+    detailsJson.getJSONObject("details").put("id", PLUGINS_PREFIX + pluginPath);
+    jdbcTemplate.update(UPDATE_PLUGIN_DETAILS, detailsJson.toString(), plugin.getId());
+
+    if (removeAfterMigration) {
+      deleteFile(pluginPath, sourceBucket);
+    }
   }
 
   private void migrateIntegrationSecrets() {
@@ -390,4 +423,5 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       logger.warn("Bucket {} isn't delete due to exception {}", bucketName, e.getMessage());
     }
   }
+
 }
