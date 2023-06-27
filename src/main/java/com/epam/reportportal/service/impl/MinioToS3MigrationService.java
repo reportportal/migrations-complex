@@ -1,7 +1,7 @@
 package com.epam.reportportal.service.impl;
 
+import com.epam.reportportal.logging.LogMigration;
 import com.epam.reportportal.service.MigrationService;
-import com.epam.reportportal.utils.MigrationUtils;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -33,11 +33,10 @@ public class MinioToS3MigrationService implements MigrationService {
   private static final String SHELL_SCRIPT_PATH = "migration.sh";
 
   @Override
+  @LogMigration(value = "Migration from MinIO to S3")
   public void migrate() {
     try {
-      MigrationUtils.startLog("migration from MinIO to S3");
       setupAndExecuteShellScript();
-      MigrationUtils.endLog("migration from MinIO to S3");
     } catch (IOException | InterruptedException e) {
       logger.error("Error executing migration.sh script: {}", e.getMessage());
     }

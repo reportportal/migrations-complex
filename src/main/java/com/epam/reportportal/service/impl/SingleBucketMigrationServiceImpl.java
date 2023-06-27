@@ -1,11 +1,11 @@
 package com.epam.reportportal.service.impl;
 
+import com.epam.reportportal.logging.LogMigration;
 import com.epam.reportportal.model.Attachment;
 import com.epam.reportportal.model.Plugin;
 import com.epam.reportportal.model.User;
 import com.epam.reportportal.service.MigrationService;
 import com.epam.reportportal.utils.AttachmentRowMapper;
-import com.epam.reportportal.utils.MigrationUtils;
 import com.epam.reportportal.utils.PluginRowMapper;
 import com.epam.reportportal.utils.UserRowMapper;
 import com.google.common.collect.Iterables;
@@ -108,8 +108,8 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
   @Transactional
   @Override
+  @LogMigration("Migration from multi-bucket to single-bucket")
   public void migrate() {
-    MigrationUtils.startLog("migration from multi-bucket to single-bucket");
     if (!StringUtils.isEmpty(singleBucketName)) {
 
       if (!bucketExists(singleBucketName)) {
@@ -128,7 +128,6 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       migrateUserPhotos();
       migrateProjectData();
     }
-    MigrationUtils.endLog("migration from multi-bucket to single-bucket");
   }
 
   private void migrateProjectData() {

@@ -68,6 +68,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-jdbc'
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-amqp'
+    implementation 'org.springframework.boot:spring-boot-starter-aop'
+    implementation 'org.aspectj:aspectjweaver:1.9.7'
 
     implementation 'com.amazonaws:aws-java-sdk-s3:1.12.456'
     implementation 'software.amazon.awssdk:s3-transfer-manager:2.20.57'
