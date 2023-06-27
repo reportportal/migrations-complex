@@ -1,5 +1,4 @@
 #!/bin/sh
-set -x
 
 mc alias set minio_al $MINIO_ENDPOINT $MINIO_ACCESS_KEY $MINIO_SECRET_KEY
 mc alias set s3_al $S3_ENDPOINT "$S3_ACCESS_KEY" "$S3_SECRET_KEY"

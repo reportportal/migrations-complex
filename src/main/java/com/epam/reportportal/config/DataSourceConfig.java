@@ -19,10 +19,12 @@ package com.epam.reportportal.config;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import javax.sql.DataSource;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 
 /**
@@ -31,11 +33,17 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 @Configuration
 @ConfigurationProperties(prefix = "rp.datasource")
 @EnableTransactionManagement
+@ConditionalOnExpression("'${rp.db.host:}'.length() > 0")
 public class DataSourceConfig extends HikariConfig {
 
   @Primary
   @Bean
   public DataSource dataSource() {
     return new HikariDataSource(this);
+  }
+
+  @Bean
+  public JdbcTemplate jdbcTemplate(DataSource dataSource) {
+    return new JdbcTemplate(dataSource);
   }
 }

@@ -1,5 +1,6 @@
 package com.epam.reportportal.service.impl;
 
+import com.epam.reportportal.logging.LogMigration;
 import com.epam.reportportal.model.AccessToken;
 import com.epam.reportportal.model.ApiKey;
 import com.epam.reportportal.service.MigrationService;
@@ -43,8 +44,8 @@ public class TokenMigrationService implements MigrationService {
   }
 
   @Override
+  @LogMigration("Migration of old tokens to api keys")
   public void migrate() {
-    logger.info("Starting token migration...");
     List<AccessToken> tokens = jdbcTemplate.query(SELECT_ACCESS_TOKENS, new AccessTokenRowMapper());
     List<ApiKey> apiKeys = new ArrayList<>();
     for (AccessToken token : tokens) {

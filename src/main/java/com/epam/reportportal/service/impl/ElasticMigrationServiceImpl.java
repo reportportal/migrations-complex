@@ -1,6 +1,7 @@
 package com.epam.reportportal.service.impl;
 
 import com.epam.reportportal.elastic.SimpleElasticSearchClient;
+import com.epam.reportportal.logging.LogMigration;
 import com.epam.reportportal.model.LaunchProjectId;
 import com.epam.reportportal.model.LogMessage;
 import com.epam.reportportal.service.MigrationService;
@@ -88,6 +89,7 @@ public class ElasticMigrationServiceImpl implements MigrationService {
   }
 
   @Override
+  @LogMigration(value = "Migration from database to Elastic")
   public void migrate() {
     //Sleep in order to ElasticSearch to start
     try {

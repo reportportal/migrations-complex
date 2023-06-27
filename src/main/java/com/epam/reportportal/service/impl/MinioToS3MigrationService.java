@@ -1,5 +1,6 @@
 package com.epam.reportportal.service.impl;
 
+import com.epam.reportportal.logging.LogMigration;
 import com.epam.reportportal.service.MigrationService;
 import java.io.BufferedReader;
 import java.io.File;
@@ -32,6 +33,7 @@ public class MinioToS3MigrationService implements MigrationService {
   private static final String SHELL_SCRIPT_PATH = "migration.sh";
 
   @Override
+  @LogMigration(value = "Migration from MinIO to S3")
   public void migrate() {
     try {
       setupAndExecuteShellScript();
@@ -60,7 +62,6 @@ public class MinioToS3MigrationService implements MigrationService {
 
     processBuilder.redirectErrorStream(true);
 
-    logger.info("Starting migration from MinIO to S3...");
     Process process = processBuilder.start();
 
     // Capture both outputs (stdout and stderr) and log them using Logger
