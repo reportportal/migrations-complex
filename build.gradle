@@ -9,7 +9,7 @@ project.ext {
     releaseMode = project.hasProperty("releaseMode")
 }
 
-def scriptsUrl = 'https://raw.githubusercontent.com/reportportal/gradle-scripts/' + (releaseMode ? getProperty('scripts.version') : 'develop')
+def scriptsUrl = 'https://raw.githubusercontent.com/reportportal/gradle-scripts/' + (releaseMode ? getProperty('scripts.version') : 'master')
 
 apply from: "$scriptsUrl/build-docker.gradle"
 apply from: "$scriptsUrl/build-commons.gradle"
@@ -49,12 +49,6 @@ ext['log4j-to-slf4j.version'] = '2.17.0'
 //
 
 dependencies {
-    if (releaseMode) {
-        implementation 'com.github.reportportal:commons-events:f130879'
-    } else {
-        implementation 'com.github.reportportal:commons-events:f130879'
-    }
-
     implementation group: 'org.json', name: 'json', version: '20220320'
 
     implementation 'net.javacrumbs.shedlock:shedlock-spring:4.21.0'
