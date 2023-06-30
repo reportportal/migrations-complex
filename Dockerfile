@@ -9,7 +9,8 @@ RUN yum install -y curl && \
 
 ARG GH_TOKEN
 RUN echo 'exec java ${JAVA_OPTS} -jar complex-migrations-1.0.0-exec.jar' > /start.sh && chmod +x /start.sh && \
-	wget --header="Authorization: Bearer ${GH_TOKEN}"  -q https://maven.pkg.github.com/reportportal/complex-migrations/com/epam/reportportal/complex-migrations/1.0.0/complex-migrations-1.0.0-exec.jar
+    curl -H "Authorization: Bearer ${GH_TOKEN}" -L -o complex-migrations-1.0.0-exec.jar \
+    https://maven.pkg.github.com/reportportal/complex-migrations/com/epam/reportportal/complex-migrations/1.0.0/complex-migrations-1.0.0-exec.jar
 
 ENV JAVA_OPTS="-Xmx1g -XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=70 -Djava.security.egd=file:/dev/./urandom"
 VOLUME ["/tmp"]
