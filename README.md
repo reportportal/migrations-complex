@@ -38,13 +38,13 @@ If you want to migrate your access tokens to API keys you need to do the followi
 4. Deploy ReportPortal with your changes
 <div style="background-color: red; padding: 10px;">
 > **Note:** Your _oauth_access_token_ table will be dropped after the migration.
-<div style="background-color: red; padding: 10px;">
+</div>
 
 ## Migration from multi-bucket system to single-bucket
 Mostly, this will be used just as a first step for [MinIO to S3 migration](#minio-to-s3-migration).
 <div style="background-color: red; padding: 10px;">
 > **Note:** This step will lead to the downtime of ReportPortal as _attachments_ table will be blocked.
-<div style="background-color: red; padding: 10px;">
+</div>
 
 To run this migration you would need to follow next steps:
 1. Add complex-migrations to your docker-compose file(check [Installation steps](#installation-steps))
