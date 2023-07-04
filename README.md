@@ -36,15 +36,15 @@ If you want to migrate your access tokens to API keys you need to do the followi
    RP_DB_NAME: reportportal
 ```
 4. Deploy ReportPortal with your changes
-<div style="background-color: red; padding: 10px;">
 > **Note:** Your _oauth_access_token_ table will be dropped after the migration.
-</div>
+>
+> <div style="color:red">
+> This step is irreversible and will permanently delete all access tokens from the database.
+> </div>
 
 ## Migration from multi-bucket system to single-bucket
 Mostly, this will be used just as a first step for [MinIO to S3 migration](#minio-to-s3-migration).
-<div style="background-color: red; padding: 10px;">
-> **Note:** This step will lead to the downtime of ReportPortal as _attachments_ table will be blocked.
-</div>
+> <span style="color:red">**<em>Note:</em> This step will lead to the downtime of ReportPortal as attachments table will be blocked.</span>**
 
 To run this migration you would need to follow next steps:
 1. Add complex-migrations to your docker-compose file(check [Installation steps](#installation-steps))
@@ -100,9 +100,7 @@ To run this migration you would need to follow next steps:
 
 ## MinIO to S3 migration
 If you want to migrate your attachments from old MinIO multi-bucket system to S3 single-bucket you need to follow next steps:
-<div style="background-color: red; padding: 10px;">
-> **Note:** Make sure that you have created S3 bucket before running migration.
-</div>
+> <span style="color:red">**<em>Note:</em> Make sure that you have created S3 bucket before running migration.</span>**
 
 1. Go through steps 1-5 from [**Migration of attachments from old multi-bucket system to single-bucket**](#migration-from-multi-bucket-system-to-single-bucket)
 2. Go through steps 3-4 from [**Migration from MinIO single-bucket to S3 single-bucket**](#migration-from-minio-single-bucket-to-s3-single-bucket)
