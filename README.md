@@ -114,4 +114,5 @@ If you want to migrate your attachments from old MinIO multi-bucket system to S3
    It applies for services api, authorization and jobs.
 ```
 5. Redeploy ReportPortal with new S3 configuration
+> ⚠️**Note:** If you don't follow the steps properly, your integration with external systems can break, and you would need to recreate them .
 
