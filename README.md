@@ -74,7 +74,7 @@ To run this migration you would need to follow next steps:
     DATASTORE_DEFAULTBUCKETNAME: <your-default-bucket-name>(default value is rp-bucket)
     DATASTORE_SINGLEBUCKETNAME: <your-single-bucket-name>
 ```
-5. If you want the data to be removed after the migration you can add `DATASTORE_REMOVE_AFTER_MIGRATION: 'true'`
+5. If you want the data in old buckets to be removed after the migration you can add `DATASTORE_REMOVE_AFTER_MIGRATION: 'true'`
 6. Deploy ReportPortal
 
 ## Migration from MinIO single-bucket to S3 single-bucket
