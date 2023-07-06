@@ -55,6 +55,8 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   public static final String PROJECT_PREFIX = "project-data/";
   public static final String USERS_MULTIBUCKET_NAME = "users";
   public static final String USERS_SINGLEBUCKET_PREFIX = "user-data/";
+
+  public static final String PHOTOS_PREFIX = "photos/";
   public static final String PLUGINS_PREFIX = "plugins/";
   public static final String SECRETS_PREFIX = "integration-secrets/";
   public static final String SELECT_ALL_PLUGINS = "SELECT id, details FROM integration_type";
@@ -325,10 +327,10 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     String cutPhotoPath = cutPath(decodedPhotoPath);
 
     copyObjectToNewBucket(bucketPrefix + USERS_MULTIBUCKET_NAME, cutPhotoPath, singleBucketName,
-        USERS_SINGLEBUCKET_PREFIX + cutPhotoPath
+        USERS_SINGLEBUCKET_PREFIX + PHOTOS_PREFIX + cutPhotoPath
     );
 
-    jdbcTemplate.update(sql, encode(USERS_SINGLEBUCKET_PREFIX + cutPhotoPath), id);
+    jdbcTemplate.update(sql, encode(USERS_SINGLEBUCKET_PREFIX + PHOTOS_PREFIX + cutPhotoPath), id);
   }
 
   private void deleteAttachments(List<Attachment> files, String bucketName) {
