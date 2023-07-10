@@ -1,0 +1,186 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "migrations-complex.fullname" . }}
+  labels:
+    {{- include "migrations-complex.labels" . | nindent 4 }}
+spec:
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "migrations-complex.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "migrations-complex.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+          # --- RP_TOKEN_MIGRATION ---
+            - name: RP_TOKEN_MIGRATION
+              value: "{{ .Values.apiKey.enabled }}"
+            {{- if .Values.apiKey.enabled }}
+            - name: RP_DB_HOST
+              value: "{{ .Values.database.endpoint }}"
+            - name: RP_DB_USER
+              value: "{{ .Values.database.user }}"
+            - name: RP_DB_PASS
+            {{ if .Values.database.secretName }}
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.database.secretName }}"
+                  key: "{{ .Values.database.passwordkKeyName }}"
+            {{ else }}
+              value: "{{ .Values.database.password }}"
+            {{ end }}
+            - name: RP_DB_NAME
+              value: "{{ .Values.database.dbName }}"
+            {{- end }}
+          # --- RP_SINGLEBUCKET_MIGRATION ---
+            - name: RP_SINGLEBUCKET_MIGRATION
+              value: "{{ .Values.multiToSingle.enable }}"
+            {{- if .Values.multiToSingle.enable }}
+            - name: DATASTORE_TYPE
+              value: "{{ .Values.multiToSingle.storageType }}"
+            - name: RP_DB_HOST
+              value: "{{ .Values.database.endpoint }}"
+            - name: RP_DB_USER
+              value: "{{ .Values.database.user }}"
+            - name: RP_DB_PASS
+            {{ if .Values.database.secretName }}
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.database.secretName }}"
+                  key: "{{ .Values.database.passwordkKeyName }}"
+            {{ else }}
+              value: "{{ .Values.database.password }}"
+              {{ end }}
+            - name: RP_DB_NAME
+              value: "{{ .Values.database.dbName }}"
+            {{ if eq .Values.multiToSingle.storageType "minio" }}
+            {{- if .Values.minio.secretName }}
+            - name: DATASTORE_ACCESSKEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.minio.secretName }}"
+                  key: "{{ .Values.minio.accesskeyName }}"
+            - name: DATASTORE_SECRETKEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.minio.secretName }}"
+                  key: "{{ .Values.minio.secretkeyName }}"
+            {{- else }}
+            - name: DATASTORE_ACCESSKEY
+              value: "{{ .Values.minio.accesskey }}"
+            - name: DATASTORE_SECRETKEY
+              value: "{{ .Values.minio.secretkey }}"
+            {{- end }}
+            - name: DATASTORE_ENDPOINT
+              value: "{{ .Values.minio.endpoint }}"
+            {{ else if eq .Values.multiToSingle.storageType "s3" }}
+            {{- if .Values.s3.secretName }}
+            - name: DATASTORE_ACCESSKEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.s3.secretName }}"
+                  key: "{{ .Values.s3.accesskeyName }}"
+            - name: DATASTORE_SECRETKEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.s3.secretName }}"
+                  key: "{{ .Values.s3.secretkeyName }}"
+            {{- else }}
+            - name: DATASTORE_ACCESSKEY
+              value: "{{ .Values.s3.accesskey }}"
+            - name: DATASTORE_SECRETKEY
+              value: "{{ .Values.s3.secretkey }}"
+            {{- end }}
+            - name: DATASTORE_ENDPOINT
+              value: "{{ .Values.s3.endpoint }}"
+            {{ end }}
+            - name: DATASTORE_BUCKETPREFIX
+              value: "{{ .Values.multiToSingle.bucket.bucketPrefix | default "prj-" }}"
+            - name: DATASTORE_DEFAULTBUCKETNAME
+              value: "{{ .Values.multiToSingle.bucket.bucketForPlugins }}" 
+            - name: DATASTORE_SINGLEBUCKETNAME
+              value: "{{ .Values.multiToSingle.bucket.bucketSingleName }}"
+            - name: DATASTORE_REGION
+              value: "{{ .Values.s3.region }}"
+            - name: DATASTORE_REMOVE_AFTER_MIGRATION
+              value: "{{ .Values.multiToSingle.removeAfterMigration }}"
+            {{- end }}
+            # ---- RP_MINIO_S3_MIGRATION ---
+            - name: RP_MINIO_S3_MIGRATION
+              value: "{{ .Values.singleMinioToSingleS3.enable }}"
+            {{- if .Values.singleMinioToSingleS3.enable }}
+            - name: MINIO_ENDPOINT
+              value: "{{ .Values.minio.endpoint }}"
+            {{- if .Values.minio.secretName }}
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.minio.secretName }}"
+                  key: "{{ .Values.minio.accesskeyName }}"
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.minio.secretName }}"
+                  key: "{{ .Values.minio.secretkeyName }}"
+            {{- else }}
+            - name: MINIO_ACCESS_KEY
+              value: "{{ .Values.minio.accesskey }}"
+            - name: MINIO_SECRET_KEY
+              value: "{{ .Values.minio.secretkey }}"
+            {{- end }}
+            - name: S3_ENDPOINT
+              value: "{{ .Values.s3.endpoint }}"
+            {{- if .Values.s3.secretName }}
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.s3.secretName }}"
+                  key: "{{ .Values.s3.accesskeyName }}"
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.s3.secretName }}"
+                  key: "{{ .Values.s3.secretkeyName }}"
+            {{- else }}
+            - name: S3_ACCESS_KEY
+              value: "{{ .Values.s3.accesskey }}"
+            - name: S3_SECRET_KEY
+              value: "{{ .Values.s3.secretkey }}"
+            {{- end }}
+            - name: MINIO_SINGLE_BUCKET
+              value: "{{ .Values.singleMinioToSingleS3.bucket.fromMinioBucket }}"
+            - name: S3_SINGLE_BUCKET
+              value: "{{ .Values.singleMinioToSingleS3.bucket.toS3Bucket }}"
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
