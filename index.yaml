@@ -1,0 +1,22 @@
+apiVersion: v1
+entries:
+  migrations-complex:
+  - apiVersion: v2
+    appVersion: 1.0.0
+    created: "2023-07-10T14:06:11.427334723Z"
+    description: Report Portral Migrations Complex Service
+    digest: ad159a74b3e3e295960d259847ca0f4fb9d0e5b27d274f42187f1d569e3ac0d9
+    keywords:
+    - reportportal
+    - migrations-complex
+    maintainers:
+    - email: support@reportportal.io
+      name: reportportal
+    name: migrations-complex
+    sources:
+    - https://github.com/reportportal/migrations-complex
+    type: application
+    urls:
+    - https://github.com/reportportal/migrations-complex/releases/download/migrations-complex-1.0.0/migrations-complex-1.0.0.tgz
+    version: 1.0.0
+generated: "2023-07-10T14:06:11.427351224Z"
