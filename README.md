@@ -14,28 +14,30 @@ Key Features:
 
 > [Helm](https://helm.sh) must be installed to use the charts. Please refer to Helm's [documentation](https://helm.sh/docs) to get started.
 
+> Link to README [reportportal/migrations-complex](https://github.com/reportportal/migrations-complex/blob/master/charts/README.md)
+
 ## Installing
 
 ### Install released version using Helm repository
 
-Add the ReportPortal Helm charts repo: `helm repo add reportportal https://reportportal.github.io/kubernetes`
+Add the ReportPortal Helm charts repo: `helm repo add reportportal-migrations https://reportportal.io/migrations-complex/`
 
 * Install it:
-    * with Helm 3: `helm install my-reportportal reportportal/reportportal`
-    * with Helm 2 (deprecated): `helm install --name my-reportportal reportportal/reportportal`
+    * with Helm 3: `helm install migrations-complex reportportal-migrations/migrations-complex`
+    * with Helm 2 (deprecated): `helm install --name migrations-complex reportportal-migrations/migrations-complex`
 
 ### Install custom version using Helm repository
 
 * Install it:
-    * with Helm 3: `helm install my-reportportal reportportal/reportportal --version=5.6.3`
-    * with Helm 2 (deprecated): `helm install --name my-reportportal reportportal/reportportal --version=5.6.3`
+    * with Helm 3: `helm install migrations-complex reportportal-migrations/migrations-complex --version=1.0.0`
+    * with Helm 2 (deprecated): `helm install --name migrations-complex reportportal-migrations/migrations-complex --version=1.0.0`
 
-### Install reportportal with custom values file using Helm repository
+### Install migrations-complex with custom values file using Helm repository
 
 * Install it:
-    * with Helm 3: `helm install my-reportportal --values=values.yaml reportportal/reportportal`
-    * with Helm 2 (deprecated): `helm install --name my-reportportal --values=values.yaml reportportal/reportportal`
+    * with Helm 3: `helm install migrations-complex --values=values.yaml reportportal-migrations/migrations-complex`
+    * with Helm 2 (deprecated): `helm install --name migrations-complex --values=values.yaml reportportal-migrations/migrations-complex`
 
 ## Uninstalling
 
-To remove Hlem Chart use the following command: `helm uninstall my-reportportal reportportal/reportportal`
+To remove Hlem Chart use the following command: `helm uninstall migrations-complex`
