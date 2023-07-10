@@ -1,0 +1,51 @@
+rp:
+  elasticsearch:
+    host: #http://elasticsearch:9200
+    username: #elastic
+    password: #elastic1q2w3e
+  migration:
+    elastic:
+      #Time before which logs should be migrated
+      #For example '2022-07-21T09:00:00'
+      startDate:
+      #Maximum number of logs migrated at once
+      logsNumber:
+  token:
+    migration: false
+  singlebucket:
+    migration: false
+  elastic:
+    migration: false
+  minio:
+    s3:
+      migration: false
+
+  datasource:
+    type: com.zaxxer.hikari.HikariDataSource
+    driverClassName: org.postgresql.Driver
+    jdbcUrl: ${rp.db.url}
+    username: ${rp.db.user}
+    password: ${rp.db.pass}
+    maximumPoolSize: 12
+
+  db:
+    url: jdbc:postgresql://${rp.db.host}:${rp.db.port}/${rp.db.name}
+    name: reportportal
+    port: 5432
+    user: rpuser
+    pass: rppass
+
+datastore:
+  type:
+  accessKey:
+  secretKey:
+  endpoint:
+  region: eu-west-1
+  bucketPrefix: prj-
+  defaultBucketName: rp-bucket
+  singleBucketName:
+  secrets:
+    path: keystore
+  remove:
+    after:
+      migration: false

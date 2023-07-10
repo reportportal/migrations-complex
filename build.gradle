@@ -1,0 +1,96 @@
+plugins {
+    id 'org.springframework.boot' version '2.4.3'
+    id 'io.spring.dependency-management' version '1.0.11.RELEASE'
+    id 'java'
+}
+
+project.ext {
+    publishRepo = "https://maven.pkg.github.com/reportportal/migrations-complex"
+    releaseMode = project.hasProperty("releaseMode")
+}
+
+def scriptsUrl = 'https://raw.githubusercontent.com/reportportal/gradle-scripts/' + (releaseMode ? getProperty('scripts.version') : 'master')
+
+apply from: "$scriptsUrl/build-docker.gradle"
+apply from: "$scriptsUrl/build-commons.gradle"
+apply from: "$scriptsUrl/build-info.gradle"
+apply from: "$scriptsUrl/build-quality.gradle"
+apply from: "$scriptsUrl/release-service.gradle"
+apply from: "$scriptsUrl/signing.gradle"
+
+sourceCompatibility = '11'
+
+wrapper {
+    gradleVersion = '6.3'
+}
+
+bootJar {
+    project.hasProperty('gcp') ? getArchiveFileName().set('app.jar') : archiveClassifier.set('exec')
+}
+jar.enabled(true)
+
+repositories {
+    mavenCentral { url "https://repo1.maven.org/maven2" }
+    maven { url 'https://repo.spring.io/libs-milestone' }
+    maven { url 'https://jitpack.io' }
+}
+
+processResources {
+    dependsOn(gitInfo)
+    filesMatching('application.properties') {
+        expand(project.properties)
+    }
+}
+
+//https://nvd.nist.gov/vuln/detail/CVE-2020-9488 and https://nvd.nist.gov/vuln/detail/CVE-2021-44228 and https://nvd.nist.gov/vuln/detail/CVE-2021-45046 and
+//https://nvd.nist.gov/vuln/detail/CVE-2021-45105
+ext['log4j2.version'] = '2.17.0'
+ext['log4j-to-slf4j.version'] = '2.17.0'
+//
+
+dependencies {
+    implementation group: 'org.json', name: 'json', version: '20220320'
+
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:4.21.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:4.21.0'
+
+    // https://mvnrepository.com/artifact/org.apache.commons/commons-lang3
+    implementation group: 'org.apache.commons', name: 'commons-lang3', version: '3.12.0'
+
+
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-amqp'
+    implementation 'org.springframework.boot:spring-boot-starter-aop'
+    implementation 'org.aspectj:aspectjweaver:1.9.7'
+
+    implementation 'com.amazonaws:aws-java-sdk-s3:1.12.456'
+    implementation 'software.amazon.awssdk:s3-transfer-manager:2.20.57'
+    implementation 'software.amazon.awssdk.crt:aws-crt:0.21.8'
+
+    implementation 'com.google.guava:guava:31.1-jre'
+
+    implementation 'org.json:json:20230227'
+
+
+    compile "com.rabbitmq:http-client:2.1.0.RELEASE"
+
+    runtimeOnly 'org.postgresql:postgresql'
+
+    testCompile 'org.junit.jupiter:junit-jupiter:5.5.2'
+    testCompile 'org.junit.jupiter:junit-jupiter-api:5.5.2'
+    testCompile 'org.junit.jupiter:junit-jupiter-params:5.5.2'
+    testCompile 'org.junit.jupiter:junit-jupiter-engine:5.5.2'
+    testCompile 'org.mockito:mockito-junit-jupiter:3.1.0'
+
+}
+
+test {
+    useJUnitPlatform()
+}
+
+addDockerfileToGit.dependsOn createDockerfile
+beforeReleaseBuild.dependsOn addDockerfileToGit
+publish.dependsOn build
+publish.mustRunAfter build
