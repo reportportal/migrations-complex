@@ -11,8 +11,7 @@ on:
 
 env:
   GH_USER_NAME: github.actor
-  SCRIPTS_VERSION: 5.7.0
-  BOM_VERSION: 5.7.0
+  SCRIPTS_VERSION: 5.8.0
   REPOSITORY_URL: 'https://maven.pkg.github.com/'
 
 jobs:
@@ -42,6 +41,5 @@ jobs:
         id: release
         run: |
           ./gradlew release -PreleaseMode -Pscripts.version=${{env.SCRIPTS_VERSION}} \
-          -Pbom.version=${{env.BOM_VERSION}} \
           -PgithubUserName=${{env.GH_USER_NAME}} -PgithubToken=${{secrets.GITHUB_TOKEN}} \
           -PgpgPassphrase=${{secrets.GPG_PASSPHRASE}} -PgpgPrivateKey="${{secrets.GPG_PRIVATE_KEY}}"
