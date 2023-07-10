@@ -24,8 +24,8 @@ node {
     }
     stage('Push to registries') {
         withEnv(["AWS_URI=${AWS_URI}", "AWS_REGION=${AWS_REGION}"]) {
-            sh 'docker tag reportportal-dev/complex-migrations ${AWS_URI}/complex-migrations:SNAPSHOT-${BUILD_NUMBER}'
-            def image = env.AWS_URI + '/complex-migrations' + ':SNAPSHOT-' + env.BUILD_NUMBER
+            sh 'docker tag reportportal-dev/migrations-complex ${AWS_URI}/migrations-complex:SNAPSHOT-${BUILD_NUMBER}'
+            def image = env.AWS_URI + '/migrations-complex' + ':SNAPSHOT-' + env.BUILD_NUMBER
             def url = 'https://' + env.AWS_URI
             def credentials = 'ecr:' + env.AWS_REGION + ':aws_credentials'
             echo image
@@ -36,8 +36,8 @@ node {
     }
     stage('Cleanup') {
         withEnv(["AWS_URI=${AWS_URI}"]) {
-            sh 'docker rmi ${AWS_URI}/complex-migrations:SNAPSHOT-${BUILD_NUMBER}'
-            sh 'docker rmi reportportal-dev/complex-migrations:latest'
+            sh 'docker rmi ${AWS_URI}/migrations-complex:SNAPSHOT-${BUILD_NUMBER}'
+            sh 'docker rmi reportportal-dev/migrations-complex:latest'
         }
     }
 }
