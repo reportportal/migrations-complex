@@ -5,7 +5,7 @@ plugins {
 }
 
 project.ext {
-    publishRepo = "https://maven.pkg.github.com/reportportal/complex-migrations"
+    publishRepo = "https://maven.pkg.github.com/reportportal/migrations-complex"
     releaseMode = project.hasProperty("releaseMode")
 }
 

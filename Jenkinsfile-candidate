@@ -39,10 +39,10 @@ node {
 
     stage('Push to ECR') {
         withEnv(["AWS_URI=${AWS_URI}", "AWS_REGION=${AWS_REGION}", "TAG=${VERSION}"]) {
-            def image = env.AWS_URI + '/complex-migrations:' + env.TAG + '-RC-' + env.BUILD_NUMBER
+            def image = env.AWS_URI + '/migrations-complex:' + env.TAG + '-RC-' + env.BUILD_NUMBER
             def url = 'https://' + env.AWS_URI
             def credentials = 'ecr:' + env.AWS_REGION + ':aws_credentials'
-            sh './gradlew buildDocker -P dockerTag=$AWS_URI/complex-migrations:$VERSION-RC-$BUILD_NUMBER'
+            sh './gradlew buildDocker -P dockerTag=$AWS_URI/migrations-complex:$VERSION-RC-$BUILD_NUMBER'
             docker.withRegistry(url, credentials) {
                 docker.image(image).push()
             }
@@ -51,7 +51,7 @@ node {
 
     stage('Cleanup') {
         withEnv(["AWS_URI=${AWS_URI}"]) {
-            sh 'docker rmi ${AWS_URI}/complex-migrations:${VERSION}-RC-${BUILD_NUMBER}'
+            sh 'docker rmi ${AWS_URI}/migrations-complex:${VERSION}-RC-${BUILD_NUMBER}'
         }
     }
 }

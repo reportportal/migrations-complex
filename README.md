@@ -1,4 +1,4 @@
-# complex-migrations
+# migrations-complex
 ReportPortal service for different migrations
 
 ## Copyright Notice
@@ -9,8 +9,8 @@ license (see the LICENSE file).
 To add this service to ReportPortal deployment you would need to
 add this to your docker-compose file:
 ```
-    complex-migrations:
-        image: reportportal/complex-migrations:latest
+    migrations-complex:
+        image: reportportal/migrations-complex:latest
         environment:
             ...
 ```
@@ -26,7 +26,7 @@ If you want to run all migrations at once you just would need to pass correspond
 
 ## Old tokens to API keys migration
 If you want to migrate your access tokens to API keys you need to do the following steps:
-1. Add complex-migrations to your docker-compose file(check [Installation steps](#installation-steps))
+1. Add migrations-complex to your docker-compose file(check [Installation steps](#installation-steps))
 2. Add `RP_TOKEN_MIGRATION: "true"` to your environment part
 3. Add database environment variables like this:
 ```   
@@ -45,7 +45,7 @@ Mostly, this will be used just as a first step for [MinIO to S3 migration](#mini
 > ⚠️**Note:** This step will lead to the downtime of ReportPortal as attachments table will be blocked.
 
 To run this migration you would need to follow next steps:
-1. Add complex-migrations to your docker-compose file(check [Installation steps](#installation-steps))
+1. Add migrations-complex to your docker-compose file(check [Installation steps](#installation-steps))
 2. Add `RP_SINGLEBUCKET_MIGRATION: "true"` to your environment part
 3. Add database environment variables like this:
 ```   
@@ -81,7 +81,7 @@ To run this migration you would need to follow next steps:
 Mostly, this will be used just as a second step for [MinIO to S3 migration](#minio-to-s3-migration).
 To run this migration you would need to follow next steps:
 1. Create bucket in S3
-2. Add complex-migrations to your docker-compose file(check [Installation steps](#installation-steps))
+2. Add migrations-complex to your docker-compose file(check [Installation steps](#installation-steps))
 3. Add `RP_MINIO_S3_MIGRATION: "true"` to your environment part
 4. Provide these environment variables:
 ```   
@@ -94,7 +94,7 @@ To run this migration you would need to follow next steps:
     MINIO_SINGLE_BUCKET: <name-of-minio-single-bucket>
     S3_SINGLE_BUCKET: <name-of-s3-single-bucket>
 ```
-5. Deploy **complex-migrations** service
+5. Deploy **migrations-complex** service
 
 ## MinIO to S3 migration
 If you want to migrate your attachments from old MinIO multi-bucket system to S3 single-bucket you need to follow next steps:
@@ -102,7 +102,7 @@ If you want to migrate your attachments from old MinIO multi-bucket system to S3
 
 1. Go through steps 1-5 from [**Migration of attachments from old multi-bucket system to single-bucket**](#migration-from-multi-bucket-system-to-single-bucket)
 2. Go through steps 3-4 from [**Migration from MinIO single-bucket to S3 single-bucket**](#migration-from-minio-single-bucket-to-s3-single-bucket)
-3. Deploy ReportPortal with complex-migration service
+3. Deploy ReportPortal with migrations-complex service
 4. After migration is completed you can update your binary storage variables in services to use s3:
 ```
    DATASTORE_TYPE: s3
