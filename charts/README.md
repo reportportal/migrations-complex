@@ -176,7 +176,7 @@ s3:
 
 ## Installation steps
 
-* Add the ReportPortal Helm charts repo: `helm repo add reportportal-migrations https://reportportal.io/migrations-complex/`
+Add the ReportPortal Helm charts repo: `helm repo add reportportal-migrations https://reportportal.io/migrations-complex/`
 
 > You can migrate all 3 steps at once in one run
 
@@ -278,7 +278,7 @@ helm install multi-single-migrations \
   -f complex-migration-values.yaml \
   reportportal-migrations/migrations-complex
 ```
-6. Upgrade ReportPortal with new values:
+6. Upgrade ReportPortal with [new values](https://github.com/reportportal/kubernetes/blob/release/23.2/reportportal/values.yaml#L441):
     - `storage.type=s3` - switch to Amazon S3
     - `storage.secretName=S3-access-keys` - access and secret key to S3
     - `storage.region=us-west-3` - bucket region
