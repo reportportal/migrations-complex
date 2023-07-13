@@ -1,27 +1,27 @@
 # Report Portral Migrations Complex Service
 
-## Table of Contents
+# Table of Contents
 - [Report Portral Migrations Complex Service](#report-portral-migrations-complex-service)
-  - [Table of Contents](#table-of-contents)
-  - [Description](#description)
+- [Table of Contents](#table-of-contents)
+- [Description](#description)
 - [Parameters](#parameters)
   - [Image Parameters](#image-parameters)
   - [Common parameters](#common-parameters)
   - [Job.batch parameters](#jobbatch-parameters)
   - [Container environments](#container-environments)
-  - [Dependencies](#dependencies)
-    - [API keys migration](#api-keys-migration)
-    - [Migration from multi-bucket system to single-bucket](#migration-from-multi-bucket-system-to-single-bucket)
-    - [MinIO to S3 migration](#minio-to-s3-migration)
-  - [Installation steps](#installation-steps)
-    - [API keys migration](#api-keys-migration-1)
-    - [Migration from multi-bucket system to single-bucket](#migration-from-multi-bucket-system-to-single-bucket-1)
+- [Dependencies](#dependencies)
+  - [API keys migration](#api-keys-migration)
+  - [Migration from multi-bucket system to single-bucket](#migration-from-multi-bucket-system-to-single-bucket)
+  - [MinIO to S3 migration](#minio-to-s3-migration)
+- [Installation steps](#installation-steps)
+  - [API keys migration](#api-keys-migration-1)
+  - [Migration from multi-bucket system to single-bucket](#migration-from-multi-bucket-system-to-single-bucket-1)
     - [Migration from multi-bucket system to single-bucket](#migration-from-multi-bucket-system-to-single-bucket-2)
-    - [Migration from MinIO single-bucket to S3 single-bucket](#migration-from-minio-single-bucket-to-s3-single-bucket)
-    - [All steps at once in one run](#all-steps-at-once-in-one-run)
+  - [Migration from MinIO single-bucket to S3 single-bucket](#migration-from-minio-single-bucket-to-s3-single-bucket)
+  - [All steps at once in one run](#all-steps-at-once-in-one-run)
 
 
-## Description
+# Description
 
 Our data migration service offers seamless and efficient transfer of data from multiple buckets to a single destination in either MinIO or Amazon S3, both of which provide reliable binary storage solutions. Whether you need to consolidate data from multiple sources into a central location or migrate your existing MinIO data to S3, our service ensures a smooth transition while preserving data integrity.
 
@@ -93,9 +93,9 @@ Key Features:
 |`database.dbName`|Database name|`reportportal`|
 |`database.password`|Database pasword. Required if `secretName` is not specified|`""`|
 
-## Dependencies
+# Dependencies
 
-### API keys migration
+## API keys migration
 
 To migrate API keys, you must specify:
 1. Enable migration by `apiKey.enabled=true`.
@@ -115,7 +115,7 @@ database:
   password:
 ```
 
-### Migration from multi-bucket system to single-bucket
+## Migration from multi-bucket system to single-bucket
 
 To migrate from multi-bucket system to single-bucket you must specify:
 1. Enable migration by `multiToSingle.enabled=true`.
@@ -163,7 +163,7 @@ database:
   password:
 ```
 
-### MinIO to S3 migration
+## MinIO to S3 migration
 
 To migrate from MinIO single-bucket to S3 single-bucket you must specify:
 1. Enable migration by `singleMinioToSingleS3.enabled=true`.
@@ -197,14 +197,14 @@ s3:
 
 ```
 
-## Installation steps
+# Installation steps
 
 Add the ReportPortal Helm charts repo: `helm repo add reportportal-migrations https://reportportal.io/migrations-complex/`
 
 > You can migrate all 3 steps at once in one run
 
 
-### API keys migration
+## API keys migration
 
 If you want to migrate your access tokens to API keys you need to do the following steps:
 
@@ -230,7 +230,7 @@ helm uninstall api-key-migrations
 > ⚠️ This step is irreversible and will permanently delete all access tokens from the database.
 
 
-### Migration from multi-bucket system to single-bucket
+## Migration from multi-bucket system to single-bucket
 
 > ⚠️ Note: This step will lead to the downtime of ReportPortal as attachments table will be blocked.
 
@@ -284,7 +284,7 @@ helm uninstall multi-single-migrations
     - [Specify bucket name](https://github.com/reportportal/kubernetes/blob/release/23.2/reportportal/values.yaml#L465)
 12. Deploy Report Portal.
 
-### Migration from MinIO single-bucket to S3 single-bucket
+## Migration from MinIO single-bucket to S3 single-bucket
 
 To switch from single bucket MinIO to single bucket S3, follow the following steps:
 
@@ -312,7 +312,7 @@ helm install multi-single-migrations \
 helm uninstall multi-single-migrations
 ```
 
-### All steps at once in one run
+## All steps at once in one run
 
 1. Uninstall ReportPortal
 2. Download Complex Migration values: 
