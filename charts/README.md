@@ -173,7 +173,7 @@ To migrate from MinIO single-bucket to S3 single-bucket you must specify:
 
 ```yaml
 singleMinioToSingleS3:
-  enable: fasle
+  enable: false
   bucket:
     fromMinioBucket: "rp-storage"
     toS3Bucket: "rp-s3-storage"
