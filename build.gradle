@@ -49,27 +49,16 @@ ext['log4j-to-slf4j.version'] = '2.17.0'
 //
 
 dependencies {
-    if (releaseMode) {
-        implementation 'com.github.reportportal:commons-events:f130879'
-    } else {
-        implementation 'com.github.reportportal:commons-events:f130879'
-    }
 
     implementation group: 'org.json', name: 'json', version: '20220320'
-
-    implementation 'net.javacrumbs.shedlock:shedlock-spring:4.21.0'
-    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:4.21.0'
 
     // https://mvnrepository.com/artifact/org.apache.commons/commons-lang3
     implementation group: 'org.apache.commons', name: 'commons-lang3', version: '3.12.0'
 
-
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-jdbc'
     implementation 'org.springframework.boot:spring-boot-starter-web'
-    implementation 'org.springframework.boot:spring-boot-starter-amqp'
     implementation 'org.springframework.boot:spring-boot-starter-aop'
-    implementation 'org.aspectj:aspectjweaver:1.9.7'
 
     implementation 'com.amazonaws:aws-java-sdk-s3:1.12.456'
     implementation 'software.amazon.awssdk:s3-transfer-manager:2.20.57'
@@ -77,18 +66,7 @@ dependencies {
 
     implementation 'com.google.guava:guava:31.1-jre'
 
-    implementation 'org.json:json:20230227'
-
-
-    compile "com.rabbitmq:http-client:2.1.0.RELEASE"
-
     runtimeOnly 'org.postgresql:postgresql'
-
-    testCompile 'org.junit.jupiter:junit-jupiter:5.5.2'
-    testCompile 'org.junit.jupiter:junit-jupiter-api:5.5.2'
-    testCompile 'org.junit.jupiter:junit-jupiter-params:5.5.2'
-    testCompile 'org.junit.jupiter:junit-jupiter-engine:5.5.2'
-    testCompile 'org.mockito:mockito-junit-jupiter:3.1.0'
 
 }
 
