@@ -34,6 +34,7 @@ jobs:
     uses: reportportal/.github/.github/workflows/build-docker-image.yaml@main
     with:
       aws-region: ${{ vars.AWS_REGION }}
+      ecr-repository: ${{ vars.ECR_REPOSITORY }}
       image-tag: ${{ needs.variables-setup.outputs.tag }}
       release-mode: false
       additional-tag: 'latest'
