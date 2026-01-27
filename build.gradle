@@ -1,6 +1,6 @@
 plugins {
-    id 'org.springframework.boot' version '2.4.3'
-    id 'io.spring.dependency-management' version '1.0.11.RELEASE'
+    id 'org.springframework.boot' version '2.7.18'
+    id 'io.spring.dependency-management' version '1.1.4'
     id 'java'
 }
 
@@ -14,8 +14,10 @@ def scriptsUrl = 'https://raw.githubusercontent.com/reportportal/gradle-scripts/
 apply from: "$scriptsUrl/build-commons.gradle"
 apply from: "$scriptsUrl/build-info.gradle"
 apply from: "$scriptsUrl/build-quality.gradle"
-apply from: "$scriptsUrl/release-service.gradle"
-apply from: "$scriptsUrl/signing.gradle"
+if (releaseMode) {
+    apply from: "$scriptsUrl/release-service.gradle"
+    apply from: "$scriptsUrl/signing.gradle"
+}
 
 sourceCompatibility = '11'
 
@@ -72,6 +74,8 @@ test {
     useJUnitPlatform()
 }
 
-beforeReleaseBuild.dependsOn build
-publish.dependsOn build
-publish.mustRunAfter build
+if (releaseMode) {
+    beforeReleaseBuild.dependsOn build
+    publish.dependsOn build
+    publish.mustRunAfter build
+}
