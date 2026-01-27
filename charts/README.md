@@ -1,334 +1,573 @@
-# Report Portal Migrations Complex Service
+# ReportPortal Migrations Complex Service
 
-# Table of Contents
-- [Report Portral Migrations Complex Service](#report-portral-migrations-complex-service)
-- [Table of Contents](#table-of-contents)
-- [Description](#description)
-- [Parameters](#parameters)
-  - [Image Parameters](#image-parameters)
-  - [Common parameters](#common-parameters)
-  - [Job.batch parameters](#jobbatch-parameters)
-  - [Container environments](#container-environments)
-- [Dependencies](#dependencies)
-  - [API keys migration](#api-keys-migration)
-  - [Migration from multi-bucket system to single-bucket](#migration-from-multi-bucket-system-to-single-bucket)
-  - [MinIO to S3 migration](#minio-to-s3-migration)
-- [Installation steps](#installation-steps)
-  - [API keys migration](#api-keys-migration-1)
-  - [Migration from multi-bucket system to single-bucket](#migration-from-multi-bucket-system-to-single-bucket-1)
-    - [Migration from multi-bucket system to single-bucket](#migration-from-multi-bucket-system-to-single-bucket-2)
-  - [Migration from MinIO single-bucket to S3 single-bucket](#migration-from-minio-single-bucket-to-s3-single-bucket)
-  - [All steps at once in one run](#all-steps-at-once-in-one-run)
+A Helm chart for migrating ReportPortal data between storage systems and upgrading database schemas. This service handles three types of migrations that can run independently or together in a single execution.
 
+## Table of Contents
 
-# Description
+- [Quick Start](#quick-start)
+- [What This Service Does](#what-this-service-does)
+- [Migration Types](#migration-types)
+- [Prerequisites](#prerequisites)
+- [Configuration Guide](#configuration-guide)
+  - [Quick Reference: All Parameters](#quick-reference-all-parameters)
+  - [Database Configuration](#database-configuration)
+  - [Storage Configuration](#storage-configuration)
+- [Migration Scenarios](#migration-scenarios)
+  - [Scenario 1: API Keys Migration Only](#scenario-1-api-keys-migration-only)
+  - [Scenario 2: Multi-Bucket to Single-Bucket](#scenario-2-multi-bucket-to-single-bucket)
+  - [Scenario 3: MinIO to S3 Migration](#scenario-3-minio-to-s3-migration)
+  - [Scenario 4: Complete Migration (All Steps)](#scenario-4-complete-migration-all-steps)
+- [Installation Steps](#installation-steps)
+- [Troubleshooting](#troubleshooting)
 
-Our data migration service offers seamless and efficient transfer of data from multiple buckets to a single destination in either MinIO or Amazon S3, both of which provide reliable binary storage solutions. Whether you need to consolidate data from multiple sources into a central location or migrate your existing MinIO data to S3, our service ensures a smooth transition while preserving data integrity.
+---
 
-Key Features:
+## Quick Start
 
-1. **Consolidation of Multiple Buckets**: If you have data spread across various buckets, our service simplifies the process of merging them into a single destination. We handle the complexities of transferring large volumes of data, maintaining file structures, and ensuring data consistency throughout the migration process.
+1. **Add the Helm repository:**
+   ```bash
+   helm repo add reportportal-migrations https://reportportal.io/migrations-complex/
+   helm repo update
+   ```
 
-2. **MinIO to S3 Migration**: Report Portal storage migration from multiple buckets to single bucket for S3 and MinIO. If you are looking to migrate your data from MinIO to Amazon S3, our service facilitates a seamless transition. We securely transfer your binary data while preserving metadata, permissions, and any custom configurations you have set up in your MinIO instance. This ensures that your data remains intact and accessible in the new storage environment.
+2. **Download default values:**
+   ```bash
+   helm show values reportportal-migrations/migrations-complex > my-migration-values.yaml
+   ```
 
-3. **Database API Key Migration**: In addition to data migration, we also offer API key migrations services for databases. If you are transitioning to a new database platform or upgrading your existing one, we ensure the smooth transfer of API keys.
-# Parameters
-## Image Parameters
-|Name|Description|Value|
-|-|-|-|
-|`image.repository`|Image repository|`reportportal/migrations-complex`|
-|`image.tag`|Image tag|`1.0.0`|
-|`image.pullPolicy`|Image pull policy|`IfNotPresent`|
-|`imagePullSecrets`|Specify docker-registry secret names as an array|`[]`|
+3. **Edit the values file** to enable your desired migration(s) and configure credentials
 
-## Common parameters
-|Name|Description|Value|
-|-|-|-|
-|`nameOverride`|String to partially override rabbitmq.fullname template (will maintain the release name)|`""`|
-|`fullnameOverride`|String to fully override rabbitmq.fullname template|`""`|
+4. **Deploy the migration:**
+   ```bash
+   helm install my-migration reportportal-migrations/migrations-complex -f my-migration-values.yaml
+   ```
 
-## Job.batch parameters
-|Name|Description|Value|
-|-|-|-|
-|`podAnnotations`|Pod annotations. Evaluated as a template|`{}`|
-|`podSecurityContext`|Security Context|`{}`|
-|`securityContext`|Container Security Context|`{}`|
-|`resources.limits`|The limits limits for container|`{}`|
-|`resources.requests`|The resources limits for container|`{}`|
-|`nodeSelector`|Node labels for pod assignment. Evaluated as a template|`{}`|
-|`tolerations`|Tolerations for pod assignment. Evaluated as a template|`[]`|
-|`affinity`|Pod affinity|`[]`|
+5. **Monitor the migration:**
+   ```bash
+   kubectl get pods -l app.kubernetes.io/name=migrations-complex
+   kubectl logs -l app.kubernetes.io/name=migrations-complex --follow
+   ```
 
-## Container environments
-|Name|Description|Value|
-|-|-|-|
-|`apiKey.enabled`|Enable API key migrations|`false`|
-|`multiToSingle.enabled`|Enable storage migration from multiple buckets to single bucket for S3 and MinIO|`false`|
-|`multiToSingle.storageType`|Switching between MinIO and S3 storages (parametes: `minio`, `s3`)|`minio`|
-|`multiToSingle.removeAfterMigration`|Allow files to be deleted after migration|`false`|
-|`multiToSingle.bucket.bucketPrefix`|Bucket prefix on FS|`prj-`|
-|`multiToSingle.bucket.bucketForPlugins`|Bucket name for storing Plugins|`rp-bucket`|
-|`multiToSingle.bucket.bucketSingleName`|A new single bucket to which the data will be migrated|`rp-storage`|
-|`singleMinioToSingleS3.enable`|Enable storage migration from single bucket MinIO to single bucket S3|`false`|
-|`singleMinioToSingleS3.bucket.fromMinioBucket`|MinIO bucket from which data will migrate. Must be equal to `multiToSingle.bucket.bucketSingleName`|`rp-storage`|
-|`singleMinioToSingleS3.bucket.toS3Bucket`|S3 bucket where data will be migrated to|`rp-s3-storage`|
-|`minio.secretName`|Secret name with access and secret key for MinIO|`""`|
-|`minio.accesskey`|MinIO access key. Required if `SecretName` is not specified|`""`|
-|`minio.secretkey`|Minio Secret key. Required if `SecretName` is not specified|`""`|
-|`minio.accesskeyName`|Key form K8s Secret for Access key (`.data.access-key`)|`access-key`|
-|`minio.secretkeyName`|Key form K8s Secret for Secret key (`.data.secret-key`)|`secret-key`|
-|`minio.endpoint`|MinIO endpoint|`http://<minio-release-name>-minio.default.svc.cluster.local:9000`|
-|`s3.region`|Amazon S3 Region|`us-west-3`|
-|`s3.secretName`|Secret name with access and secret key for S3|`""`|
-|`s3.accesskey`|S3 access key. Required if `SecretName` is not specified|`""`|
-|`s3.secretkey`|S3 Secret key. Required if `SecretName` is not specified|`""`|
-|`s3.accesskeyName`|Key form K8s Secret for Access key (`.data.access-key`)|`s3-access-key`|
-|`s3.secretkeyName`|Key form K8s Secret for Secret key (`.data.secret-key`)|`s3-secret-key`|
-|`s3.endpoint`|S3 endpoint. S3 enpoints ref: [https://docs.aws.amazon.com/general/latest/gr/s3.html](https://docs.aws.amazon.com/general/latest/gr/s3.html) |`s3.eu-west-3.amazonaws.com`|
-|`database.secretName`|Secret name for database|`""`|
-|`database.passwordkKeyName`|Key form K8s Secret|`"postgresql-password"`|
-|`database.endpoint`|Database URL|`<postgresql-release-name>-postgresql.default.svc.cluster.local`|
-|`database.port`|Database port|`5432`|
-|`database.user`|Database user name|`rpuser`|
-|`database.dbName`|Database name|`reportportal`|
-|`database.password`|Database pasword. Required if `secretName` is not specified|`""`|
+6. **Clean up after completion:**
+   ```bash
+   helm uninstall my-migration
+   ```
 
-# Dependencies
+---
 
-## API keys migration
+## What This Service Does
 
-To migrate API keys, you must specify:
-1. Enable migration by `apiKey.enabled=true`.
-2. Database values
+This migration service helps you:
 
+- **Upgrade to ReportPortal 23.3+**: Migrate OAuth access tokens to API keys (required for versions 23.3 and higher)
+- **Consolidate Storage**: Merge multiple storage buckets into a single bucket (supports MinIO and S3)
+- **Switch Storage Providers**: Migrate data from MinIO to Amazon S3
+
+**Key Benefits:**
+- ✅ All migrations can run in a single job execution
+- ✅ Migrations execute sequentially and automatically
+- ✅ No service restart required between migrations
+- ✅ Preserves data integrity throughout the process
+
+**Downtime Summary:**
+| Migration Type | Downtime Required | Notes |
+|---------------|-------------------|-------|
+| API Keys Migration | ⚠️ **Yes** | ReportPortal must be stopped |
+| Multi-Bucket to Single-Bucket | ⚠️ **Yes** | ReportPortal must be stopped (attachments table blocked) |
+| MinIO to S3 | ✅ **No** | ReportPortal can run normally - switch to S3 and continue working |
+
+---
+
+## Migration Types
+
+### 1. Database API Keys Migration
+**When to use:** Upgrading from ReportPortal versions older than 23.3 to version 23.3 or higher
+
+**What it does:** Converts OAuth access tokens in the database to API keys format
+
+**Downtime Required:** ⚠️ **Yes** - ReportPortal must be stopped during this migration
+
+**Requirements:** Database connection credentials
+
+### 2. Multi-Bucket to Single-Bucket Migration
+**When to use:** Consolidating data from multiple buckets (e.g., `prj-1`, `prj-2`, `rp-bucket`) into one bucket
+
+**What it does:** 
+- Finds all buckets matching your project prefix (e.g., `prj-*`)
+- Consolidates all data into a single destination bucket
+- Updates database records to point to the new bucket structure
+
+**Downtime Required:** ⚠️ **Yes** - ReportPortal must be stopped during this migration (attachments table will be blocked)
+
+**Requirements:** 
+- Database connection credentials
+- Storage credentials (MinIO or S3, depending on destination)
+- Source buckets must be accessible
+
+### 3. MinIO to S3 Migration
+**When to use:** Moving from MinIO storage to Amazon S3
+
+**What it does:** Transfers all data from a single MinIO bucket to a single S3 bucket
+
+**Downtime Required:** ✅ **No** - ReportPortal can continue running! You can switch ReportPortal to use S3 storage and work normally while the migration runs in the background. The migration will copy data from MinIO to S3 without blocking ReportPortal operations.
+
+**Requirements:**
+- MinIO credentials (source)
+- S3 credentials (destination)
+- Both buckets must exist and be accessible
+
+---
+
+## Prerequisites
+
+Before starting a migration, ensure you have:
+
+- ✅ Kubernetes cluster with Helm 3.x installed
+- ✅ Access to your ReportPortal database
+- ✅ Storage credentials (MinIO and/or S3) with read/write permissions
+- ✅ Sufficient cluster resources (see [Resource Configuration](#resource-configuration))
+- ✅ Backup of your database (recommended)
+
+**Important Notes:**
+- ⚠️ **API Keys Migration** requires **downtime** - ReportPortal must be stopped during this migration
+- ⚠️ **Multi-Bucket to Single-Bucket Migration** requires **downtime** - ReportPortal must be stopped during this migration
+- ⚠️ **MinIO to S3 Migration** - ReportPortal can continue running! You can switch ReportPortal to use S3 storage and work normally while the migration runs in the background
+- ⚠️ API Keys migration is **irreversible** - OAuth tokens will be permanently deleted
+- ⚠️ Ensure you have sufficient storage space in the destination bucket
+
+---
+
+## Configuration Guide
+
+### Quick Reference: All Parameters
+
+#### Migration Enablement
 ```yaml
-apiKey:
-  enabled: false
+migrations:
+  database:
+    apiKeys:
+      enabled: false  # Set to true for API keys migration
+  storage:
+    multiBucketToSingleBucket:
+      enabled: false  # Set to true to consolidate buckets
+      destinationType: minio  # or "s3"
+      removeSourceBuckets: false  # Set to true to delete source buckets after migration
+      buckets:
+        projectPrefix: "prj-"  # Prefix for project buckets (e.g., "prj-" matches prj-1, prj-2)
+        pluginsBucket: "rp-bucket"  # Name of plugins bucket
+        singleBucketName: "rp-storage"  # Destination bucket name
+    minioToS3:
+      enabled: false  # Set to true to migrate from MinIO to S3
+      buckets:
+        sourceBucket: "rp-storage"  # MinIO source bucket
+        destinationBucket: "rp-s3-storage"  # S3 destination bucket
+```
 
+#### Database Configuration
+```yaml
 database:
-  secretName: ""
-  passwordkKeyName: "postgresql-password"
+  secretName: ""  # Optional: K8s secret name containing password
+  passwordKeyName: "postgresql-password"  # Key name in secret
   endpoint: <postgresql-release-name>-postgresql.default.svc.cluster.local
   port: 5432
   user: rpuser
   dbName: reportportal
-  password:
+  password: ""  # Required if secretName is not set
 ```
 
-## Migration from multi-bucket system to single-bucket
-
-To migrate from multi-bucket system to single-bucket you must specify:
-1. Enable migration by `multiToSingle.enabled=true`.
-2. Storage values `minio` if `multiToSingle.storageType=minio`, or `s3` if `multiToSingle.storageType=s3`
-3. Database values.
-
+#### MinIO Configuration
 ```yaml
-multiToSingle:
-  enable: false
-  ## Where will migration processing take place?
-  storageType: minio
-  # type: minio / s3
-  removeAfterMigration: false
-  bucket: 
-    bucketPrefix: "prj-"
-    ## bucket name for storing Plugins
-    bucketForPlugins: "rp-bucket"
-    ## A new single bucket to which the data will be migrated
-    bucketSingleName: "rp-storage"
+storage:
+  minio:
+    secretName: ""  # Optional: K8s secret name
+    accessKey: <minio-accesskey>  # Required if secretName not set
+    secretKey: <minio-secretkey>  # Required if secretName not set
+    accessKeyName: "access-key"  # Key name in secret
+    secretKeyName: "secret-key"  # Key name in secret
+    endpoint: <minio-release-name>-minio.default.svc.cluster.local  # Hostname only
+    ssl: false  # true for https, false for http
+    port: 9000
+```
 
-minio:
-  secretName: ""
-  accesskey: <minio-accesskey>
-  secretkey: <minio-secretkey>
-  accesskeyName: "access-key"
-  secretkeyName: "secret-key"
-  endpoint: http://<minio-release-name>-minio.default.svc.cluster.local:9000
-s3: 
-  region: "us-west-3"
-  secretName: ""
-  accesskey: <s3-accesskey>
-  secretkey: <s3-secretkey>
-  accesskeyName: "s3-access-key"
-  secretkeyName: "s3-secret-key"
-  ## S3 enpoints ref: https://docs.aws.amazon.com/general/latest/gr/s3.html
-  endpoint: http://s3.eu-west-3.amazonaws.com
+#### S3 Configuration
+```yaml
+storage:
+  s3:
+    region: "eu-central-1"  # AWS region
+    secretName: ""  # Optional: K8s secret name
+    accessKey: <s3-accesskey>  # Required if secretName not set
+    secretKey: <s3-secretkey>  # Required if secretName not set
+    accessKeyName: "access-key"  # Key name in secret
+    secretKeyName: "secret-key"  # Key name in secret
+    endpoint: https://s3.eu-central-1.amazonaws.com  # Full S3 endpoint URL
+```
+
+#### Resource Configuration
+```yaml
+resources:
+  limits:
+    cpu: 500m  # Increase for faster migrations (e.g., 2000m for large datasets)
+    memory: 512Mi  # Increase for faster migrations (e.g., 2Gi for large datasets)
+  requests:
+    cpu: 250m
+    memory: 248Mi
+```
+
+---
+
+## Migration Scenarios
+
+### Scenario 1: API Keys Migration Only
+
+**Use case:** Upgrading from ReportPortal < 23.3 to 23.3+
+
+**⚠️ Downtime Required:** Yes - ReportPortal must be stopped during this migration
+
+**Configuration:**
+```yaml
+migrations:
+  database:
+    apiKeys:
+      enabled: true
 
 database:
-  secretName: ""
-  passwordkKeyName: "postgresql-password"
-  endpoint: <postgresql-release-name>-postgresql.default.svc.cluster.local
+  endpoint: my-postgresql.default.svc.cluster.local
   port: 5432
   user: rpuser
   dbName: reportportal
-  password:
+  password: "your-password"
+  # OR use a secret:
+  # secretName: "postgresql-secret"
+  # passwordKeyName: "postgresql-password"
 ```
 
-## MinIO to S3 migration
+**Steps:**
+1. ⚠️ **Stop ReportPortal** before starting the migration
+2. Configure database credentials
+3. Deploy: `helm install api-keys-migration reportportal-migrations/migrations-complex -f values.yaml`
+4. Wait for completion: `kubectl wait --for=condition=complete job/api-keys-migration-migrations-complex --timeout=3600s`
+5. Clean up: `helm uninstall api-keys-migration`
+6. **Restart ReportPortal** after migration completes
 
-To migrate from MinIO single-bucket to S3 single-bucket you must specify:
-1. Enable migration by `singleMinioToSingleS3.enabled=true`.
-2. Buckets names.
-3. MinIO values.
-4. S3 values.
+---
 
+### Scenario 2: Multi-Bucket to Single-Bucket
+
+**Use case:** Consolidating multiple buckets into one bucket
+
+**⚠️ Downtime Required:** Yes - ReportPortal must be stopped during this migration (attachments table will be blocked)
+
+**Configuration:**
 ```yaml
-singleMinioToSingleS3:
-  enable: false
-  bucket:
-    fromMinioBucket: "rp-storage"
-    toS3Bucket: "rp-s3-storage"
+migrations:
+  storage:
+    multiBucketToSingleBucket:
+      enabled: true
+      destinationType: minio  # or "s3"
+      removeSourceBuckets: false  # Set to true to delete source buckets after migration
+      buckets:
+        projectPrefix: "prj-"
+        pluginsBucket: "rp-bucket"
+        singleBucketName: "rp-storage"
 
-minio:
-  secretName: ""
-  accesskey: <minio-accesskey>
-  secretkey: <minio-secretkey>
-  accesskeyName: "access-key"
-  secretkeyName: "secret-key"
-  endpoint: http://<minio-release-name>-minio.default.svc.cluster.local:9000
-s3: 
-  region: "us-west-3"
-  secretName: ""
-  accesskey: <s3-accesskey>
-  secretkey: <s3-secretkey>
-  accesskeyName: "s3-access-key"
-  secretkeyName: "s3-secret-key"
-  ## S3 enpoints ref: https://docs.aws.amazon.com/general/latest/gr/s3.html
-  endpoint: http://s3.eu-west-3.amazonaws.com
+storage:
+  minio:  # Use this if destinationType is "minio"
+    endpoint: my-minio.default.svc.cluster.local
+    ssl: false
+    port: 9000
+    accessKey: "minioadmin"
+    secretKey: "minioadmin"
+  # OR
+  s3:  # Use this if destinationType is "s3"
+    region: "eu-central-1"
+    endpoint: https://s3.eu-central-1.amazonaws.com
+    accessKey: "your-s3-access-key"
+    secretKey: "your-s3-secret-key"
 
+database:
+  endpoint: my-postgresql.default.svc.cluster.local
+  port: 5432
+  user: rpuser
+  dbName: reportportal
+  password: "your-password"
 ```
 
-# Installation steps
+**Steps:**
+1. ⚠️ **Stop ReportPortal** to avoid data conflicts
+2. Configure storage and database credentials
+3. Ensure destination bucket exists (or will be created automatically)
+4. Deploy: `helm install multi-to-single reportportal-migrations/migrations-complex -f values.yaml`
+5. Monitor: `kubectl logs -f job/multi-to-single-migrations-complex`
+6. After completion, update ReportPortal configuration to use single bucket
+7. Clean up: `helm uninstall multi-to-single`
 
-Add the ReportPortal Helm charts repo: `helm repo add reportportal-migrations https://reportportal.io/migrations-complex/`
+---
 
-> You can migrate all 3 steps at once in one run
+### Scenario 3: MinIO to S3 Migration
 
+**Use case:** Moving from MinIO to Amazon S3
 
-## API keys migration
+**✅ No Downtime Required:** ReportPortal can continue running! You can switch ReportPortal to use S3 storage and work normally while the migration runs in the background.
 
-If you want to migrate your access tokens to API keys you need to do the following steps:
+**Configuration:**
+```yaml
+migrations:
+  storage:
+    minioToS3:
+      enabled: true
+      buckets:
+        sourceBucket: "rp-storage"  # MinIO bucket name
+        destinationBucket: "rp-s3-storage"  # S3 bucket name (must exist)
 
-1. Download Complex Migration values: 
-```bash
-helm show values reportportal-migrations/migrations-complex > complex-migration-values.yaml
-```
-2. Enable API keys migration by `apiKey.enabled=true` [here](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L4).
-3. Fill in the [database values](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L48)
-4. Deploy the chart: 
-```bash
-helm install api-key-migrations \
-  -f complex-migration-values.yaml \
-  reportportal-migrations/migrations-complex
-```
-5. When the Job gets status `0/1 Completed` you can delete the service:
-```bash
-helm uninstall api-key-migrations
-```
-
-> Note: Your oauth_access_token table will be dropped after the migration.
-
-> ⚠️ This step is irreversible and will permanently delete all access tokens from the database.
-
-
-## Migration from multi-bucket system to single-bucket
-
-> ⚠️ Note: This step will lead to the downtime of ReportPortal as attachments table will be blocked.
-
-To switch from multiple buckets to single, follow these steps:
-1. Download Complex Migration values: 
-```bash
-helm show values reportportal-migrations/migrations-complex > complex-migration-values.yaml
-```
-2. Enable API keys migration by `multiToSingle.enabled=true` [here](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L24).
-3. Fill in the [database values](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L48)
-4. If you are migrating to MinIO, use [minio values](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L32), or if you are migrating to S3, use the following [s3 values](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L39).
-4. Deploy the chart: 
-```bash
-helm install multi-single-migrations \
-  -f complex-migration-values.yaml \
-  reportportal-migrations/migrations-complex
-```
-5. When the Job gets status `0/1 Completed` you can delete the service:
-```bash
-helm uninstall multi-single-migrations
+storage:
+  minio:
+    endpoint: my-minio.default.svc.cluster.local
+    ssl: false
+    port: 9000
+    accessKey: "minioadmin"
+    secretKey: "minioadmin"
+  s3:
+    region: "eu-central-1"
+    endpoint: https://s3.eu-central-1.amazonaws.com
+    accessKey: "your-s3-access-key"
+    secretKey: "your-s3-secret-key"
 ```
 
-### Migration from multi-bucket system to single-bucket
+**Steps:**
+1. Create the destination S3 bucket in AWS
+2. Configure MinIO and S3 credentials
+3. **Switch ReportPortal to use S3 storage** (update ReportPortal configuration to point to S3)
+4. Deploy: `helm install minio-to-s3 reportportal-migrations/migrations-complex -f values.yaml`
+5. **ReportPortal can continue working normally** - users can access ReportPortal while migration runs
+6. Monitor progress: `kubectl logs -f job/minio-to-s3-migrations-complex`
+7. Migration will copy all data from MinIO to S3 in the background
+8. Once migration completes, clean up: `helm uninstall minio-to-s3`
 
-> ⚠️ Note: This step will lead to the downtime of ReportPortal as attachments table will be blocked.
+---
 
-To switch from multiple buckets to single, follow these steps:
-1. Uninstall ReportPortal `helm uninstall reportportal`
-2. Download Complex Migration values: 
-```bash
-helm show values reportportal-migrations/migrations-complex > complex-migration-values.yaml
-```
-3. Enable migration by `multiToSingle.enabled=true` [here](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L24).
-4. Choose [storage type](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L11)
-5. Change your bucket [preferences](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L14) if you're not using the default reporting portal settings.
-6. Specify the [name of the single bucket](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L19) where the data will be transferred.
-7. If you are migrating to MinIO, use [minio values](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L32), or if you are migrating to S3, use the following [s3 values](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L39).
-8. Fill in the [database values](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L48)
-9. Deploy the chart: 
-```bash
-helm install multi-single-migrations \
-  -f complex-migration-values.yaml \
-  reportportal-migrations/migrations-complex
-```
-10. When the Job gets status `0/1 Completed` you can delete the service:
-```bash
-helm uninstall multi-single-migrations
-```
-11. Change ReportPortal values to switch from multi bucket to singe.
-    - [Switch from multi to single](https://github.com/reportportal/kubernetes/blob/release/23.2/reportportal/values.yaml#L460)
-    - [Specify bucket name](https://github.com/reportportal/kubernetes/blob/release/23.2/reportportal/values.yaml#L465)
-12. Deploy Report Portal.
+### Scenario 4: Complete Migration (All Steps)
 
-## Migration from MinIO single-bucket to S3 single-bucket
+**Use case:** Full migration: API keys + consolidate buckets + move to S3
 
-To switch from single bucket MinIO to single bucket S3, follow the following steps:
+**Configuration:**
+```yaml
+migrations:
+  database:
+    apiKeys:
+      enabled: true
+  storage:
+    multiBucketToSingleBucket:
+      enabled: true
+      destinationType: minio
+      buckets:
+        projectPrefix: "prj-"
+        pluginsBucket: "rp-bucket"
+        singleBucketName: "rp-storage"
+    minioToS3:
+      enabled: true
+      buckets:
+        sourceBucket: "rp-storage"  # Must match singleBucketName above
+        destinationBucket: "rp-s3-storage"
 
-1. Create Amazon S3 bucket `reportportal-datastore`
-2. Download Complex Migration values: 
-```bash
-helm show values reportportal-migrations/migrations-complex > complex-migration-values.yaml
-```
-3. Enable migration by `singleMinioToSingleS3.enabled=true` [here](https://github.com/reportportal/migrations-complex/blob/master/charts/values.yaml#L24).
-4. Fill in the MinIO and S3 values.
-5. Deploy the chart: 
-```bash
-helm install multi-single-migrations \
-  -f complex-migration-values.yaml \
-  reportportal-migrations/migrations-complex
-```
-6. Upgrade ReportPortal with [new values](https://github.com/reportportal/kubernetes/blob/release/23.2/reportportal/values.yaml#L441):
-    - `storage.type=s3` - switch to Amazon S3
-    - `storage.secretName=S3-access-keys` - access and secret key to S3
-    - `storage.region=us-west-3` - bucket region
-    - `storage.bucket.type=single` - switch from multi to single bucket
-    - `storage.bucket.bucketDefaultName=reportportal-datastore` - Amazon S3 bucket name.
-7. When the Job gets status `0/1 Completed` you can delete the service:
-```bash
-helm uninstall multi-single-migrations
+storage:
+  minio:
+    endpoint: my-minio.default.svc.cluster.local
+    ssl: false
+    port: 9000
+    accessKey: "minioadmin"
+    secretKey: "minioadmin"
+  s3:
+    region: "eu-central-1"
+    endpoint: https://s3.eu-central-1.amazonaws.com
+    accessKey: "your-s3-access-key"
+    secretKey: "your-s3-secret-key"
+
+database:
+  endpoint: my-postgresql.default.svc.cluster.local
+  port: 5432
+  user: rpuser
+  dbName: reportportal
+  password: "your-password"
 ```
 
-## All steps at once in one run
+**Execution Order:**
+1. API Keys Migration runs first (requires downtime)
+2. Multi-Bucket to Single-Bucket runs second (requires downtime)
+3. MinIO to S3 runs third (no downtime - ReportPortal can run)
 
-1. Uninstall ReportPortal
-2. Download Complex Migration values: 
-```bash
-helm show values reportportal-migrations/migrations-complex > complex-migration-values.yaml
-```
-3. Enable all migrations with `true` flag.
-4. Fill in all values.
-5. Deploy the chart: 
-```bash
-helm install multi-single-migrations \
-  -f complex-migration-values.yaml \
-  reportportal-migrations/migrations-complex
-```
-6. Once the migration from MinIO single to S3 single bucket is running (you can catch this from the logs), deploy the ReportPortal back `helm install reportportal`
-7. When the Job gets status `0/1 Completed` you can delete the service:
-```bash
-helm uninstall multi-single-migrations
-```
+**Steps:**
+1. ⚠️ **Stop ReportPortal** before starting migrations
+2. Create destination S3 bucket
+3. Configure all credentials
+4. Deploy: `helm install complete-migration reportportal-migrations/migrations-complex -f values.yaml`
+5. Monitor: `kubectl logs -f job/complete-migration-migrations-complex`
+6. **After API Keys and Multi-to-Single migrations complete**, switch ReportPortal to use S3 storage and **restart ReportPortal**
+7. ReportPortal can now run normally while MinIO-to-S3 migration continues in the background
+8. After all migrations complete, clean up: `helm uninstall complete-migration`
+
+---
+
+## Installation Steps
+
+### Step-by-Step Guide
+
+1. **Add Helm Repository**
+   ```bash
+   helm repo add reportportal-migrations https://reportportal.io/migrations-complex/
+   helm repo update
+   ```
+
+2. **Download Default Values**
+   ```bash
+   helm show values reportportal-migrations/migrations-complex > migration-values.yaml
+   ```
+
+3. **Edit Configuration**
+   - Open `migration-values.yaml` in your editor
+   - Enable the migrations you need
+   - Fill in all required credentials
+   - Adjust resource limits if needed for large datasets
+
+4. **Verify Configuration**
+   ```bash
+   # Validate your values file
+   helm template test-migration reportportal-migrations/migrations-complex -f migration-values.yaml --debug
+   ```
+
+5. **Deploy Migration**
+   ```bash
+   helm install my-migration reportportal-migrations/migrations-complex -f migration-values.yaml
+   ```
+
+6. **Monitor Progress**
+   ```bash
+   # Watch pod status
+   kubectl get pods -l app.kubernetes.io/name=migrations-complex -w
+   
+   # View logs
+   kubectl logs -f -l app.kubernetes.io/name=migrations-complex
+   
+   # Check job status
+   kubectl get job -l app.kubernetes.io/name=migrations-complex
+   ```
+
+7. **Verify Completion**
+   ```bash
+   # Job should show "1/1 Completed"
+   kubectl get job -l app.kubernetes.io/name=migrations-complex
+   
+   # Check pod logs for success messages
+   kubectl logs -l app.kubernetes.io/name=migrations-complex | tail -20
+   ```
+
+8. **Clean Up**
+   ```bash
+   helm uninstall my-migration
+   ```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+#### Migration Job Fails to Start
+**Symptoms:** Pod stays in `Pending` state
+
+**Solutions:**
+- Check resource availability: `kubectl describe pod <pod-name>`
+- Verify image pull secrets if using private registry
+- Check node selectors and tolerations match your cluster
+
+#### Database Connection Errors
+**Symptoms:** Logs show database connection failures
+
+**Solutions:**
+- Verify database endpoint is correct and accessible from the pod
+- Check database credentials (password or secret)
+- Ensure database allows connections from the pod's network
+- Test connection: `kubectl run -it --rm debug --image=postgres:13 -- psql -h <db-endpoint> -U <user> -d <dbname>`
+
+#### Storage Access Errors
+**Symptoms:** Logs show "access denied" or "bucket not found"
+
+**Solutions:**
+- Verify storage credentials are correct
+- Check bucket exists and is accessible
+- For S3: Verify IAM permissions allow read/write operations
+- For MinIO: Verify endpoint, SSL, and port settings
+- Test access manually using AWS CLI or MinIO client
+
+#### Migration Takes Too Long
+**Symptoms:** Migration runs for hours without progress
+
+**Solutions:**
+- Increase resource limits (CPU and memory)
+- Check network bandwidth between cluster and storage
+- Verify storage system performance
+- Monitor pod resource usage: `kubectl top pod <pod-name>`
+
+#### "Bucket Already Exists" Error
+**Symptoms:** Error when creating destination bucket
+
+**Solutions:**
+- Bucket may already exist - this is usually fine
+- Ensure bucket is empty if reusing
+- Check bucket naming conflicts
+
+#### Migration Partially Completes
+**Symptoms:** Some data migrated, but not all
+
+**Solutions:**
+- Check logs for specific errors
+- Verify source buckets are accessible
+- Ensure sufficient storage space in destination
+- Check for network interruptions during migration
+
+### Getting Help
+
+1. **Check Logs:**
+   ```bash
+   kubectl logs -l app.kubernetes.io/name=migrations-complex --tail=100
+   ```
+
+2. **Describe Job/Pod:**
+   ```bash
+   kubectl describe job <job-name>
+   kubectl describe pod <pod-name>
+   ```
+
+3. **Verify Configuration:**
+   ```bash
+   helm get values my-migration
+   ```
+
+4. **Test Connectivity:**
+   ```bash
+   # Test database
+   kubectl run -it --rm test-db --image=postgres:13 -- psql -h <db-endpoint> -U <user>
+   
+   # Test MinIO
+   kubectl run -it --rm test-minio --image=minio/mc -- mc alias set myminio http://<endpoint>:<port> <accesskey> <secretkey>
+   
+   # Test S3
+   kubectl run -it --rm test-s3 --image=amazon/aws-cli -- aws s3 ls --endpoint-url <s3-endpoint>
+   ```
+
+### Best Practices
+
+- ✅ **Always backup your database** before running migrations
+- ✅ **Test migrations in a staging environment** first
+- ✅ **Stop ReportPortal** during storage migrations to avoid conflicts
+- ✅ **Monitor resource usage** and adjust limits for large datasets
+- ✅ **Verify bucket names** match between sequential migrations
+- ✅ **Keep migration job logs** for troubleshooting
+- ✅ **Use Kubernetes secrets** for sensitive credentials instead of plain text
+
+---
+
+## Additional Resources
+
+- [ReportPortal Documentation](https://reportportal.io)
+- [Helm Documentation](https://helm.sh/docs/)
+- [Kubernetes Jobs](https://kubernetes.io/docs/concepts/workloads/controllers/job/)

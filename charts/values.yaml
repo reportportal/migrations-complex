@@ -1,60 +1,128 @@
 ##
-## API Key Migration
-apiKey:
-  enabled: false
+## MIGRATIONS CONFIGURATION
+##
+## This chart supports multiple migration types that can run independently or sequentially.
+## Migrations execute in the following order:
+##   1. Database API Keys Migration (if enabled)
+##   2. Storage: Multi-Bucket to Single-Bucket (if enabled)
+##   3. Storage: MinIO Single-Bucket to S3 Single-Bucket (if enabled)
+##
+## You can enable any combination of migrations. When multiple storage migrations are enabled,
+## they will execute sequentially in a single job run without requiring service relaunch.
+##
+migrations:
+  ## Database API Keys Migration
+  ## Migrates OAuth access tokens to API keys in the database
+  ## This is a database-only migration and does not affect storage
+  ## REQUIRED: Enable this migration when upgrading from ReportPortal versions
+  ##          older than 23.3 to version 23.3 or higher
+  database:
+    apiKeys:
+      enabled: false
+      # When enabled, requires database configuration below
+
+  ## Storage Migrations
+  ## These migrations handle moving data between storage systems
+  storage:
+    ## Migration 1: Multi-Bucket to Single-Bucket
+    ## Consolidates data from multiple buckets (prj-*, rp-bucket) into a single bucket
+    ## Supports both MinIO and S3 as the destination storage type
+    multiBucketToSingleBucket:
+      enabled: false
+      # Storage type for the destination single bucket (minio or s3)
+      destinationType: minio
+      # Whether to remove source buckets after successful migration
+      removeSourceBuckets: false
+      # Bucket configuration
+      buckets:
+        # Prefix for project-specific buckets (e.g., "prj-" matches prj-1, prj-2, etc.)
+        projectPrefix: "prj-"
+        # Bucket name for storing plugins
+        pluginsBucket: "rp-bucket"
+        # Name of the new single bucket where all data will be consolidated
+        singleBucketName: "rp-storage"
+
+    ## Migration 2: MinIO Single-Bucket to S3 Single-Bucket
+    ## Migrates data from a single MinIO bucket to a single S3 bucket
+    ## This typically runs after multiBucketToSingleBucket migration
+    ## Note: The source bucket should match the destination from multiBucketToSingleBucket
+    minioToS3:
+      enabled: false
+      # Bucket configuration
+      buckets:
+        # Source MinIO bucket (should match multiBucketToSingleBucket.buckets.singleBucketName if running sequentially)
+        sourceBucket: "rp-storage"
+        # Destination S3 bucket name
+        destinationBucket: "rp-s3-storage"
 
 ##
-## Report Portal storage migration from multiple buckets to single bucket for S3 and MinIO
-multiToSingle:
-  enable: false
-  ## Where will migration processing take place?
-  storageType: minio
-  # type: minio / s3
-  removeAfterMigration: false
-  bucket: 
-    bucketPrefix: "prj-"
-    ## bucket name for storing Plugins
-    bucketForPlugins: "rp-bucket"
-    ## A new single bucket to which the data will be migrated
-    bucketSingleName: "rp-storage"
-
+## DATABASE CONFIGURATION
+## Required for database migrations (apiKeys) and storage migrations that update database records
 ##
-## Report Portal storage migration from single bucket MinIO to single bucket S3
-singleMinioToSingleS3:
-  enable: false
-  bucket:
-    fromMinioBucket: "rp-storage"
-    toS3Bucket: "rp-s3-storage"
-
-##
-## Common values for migrations types. Which one to use read the documentation
-## Ref: https://reportportal.io
-minio:
-  secretName: ""
-  accesskey: <minio-accesskey>
-  secretkey: <minio-secretkey>
-  accesskeyName: "access-key"
-  secretkeyName: "secret-key"
-  endpoint: http://<minio-release-name>-minio.default.svc.cluster.local:9000
-s3: 
-  region: "us-west-3"
-  secretName: ""
-  accesskey: <s3-accesskey>
-  secretkey: <s3-secretkey>
-  accesskeyName: "s3-access-key"
-  secretkeyName: "s3-secret-key"
-  ## S3 enpoints ref: https://docs.aws.amazon.com/general/latest/gr/s3.html
-  endpoint: http://s3.eu-west-3.amazonaws.com
 database:
+  # Kubernetes secret name containing database password (optional, use password field if not set)
   secretName: ""
-  passwordkKeyName: "postgresql-password"
-  endpoint: <postgresql-release-name>-postgresql.default.svc.cluster.local
+  # Key name in the secret for the database password
+  passwordKeyName: "postgresql-password"
+  # Database connection details
+  # Format: <service-name>.<namespace>.svc.cluster.local
+  # Common examples: postgresql.postgresql.svc.cluster.local, postgresql.default.svc.cluster.local
+  endpoint: postgresql.postgresql.svc.cluster.local
   port: 5432
   user: rpuser
   dbName: reportportal
-  password:
+  # Database password (required if secretName is not specified)
+  password: ""
 
+##
+## STORAGE CONFIGURATION
+## Credentials and endpoints for MinIO and S3 storage systems
+##
+storage:
+  ## MinIO Configuration
+  ## Used for multiBucketToSingleBucket when destinationType is "minio"
+  ## Also used as source for minioToS3 migration
+  minio:
+    # Kubernetes secret name containing MinIO credentials (optional, use accessKey/secretKey if not set)
+    secretName: ""
+    # MinIO access key (required if secretName is not specified)
+    accessKey: ""
+    # MinIO secret key (required if secretName is not specified)
+    secretKey: ""
+    # Key names in the secret for access and secret keys
+    accessKeyName: "access-key"
+    secretKeyName: "secret-key"
+    # MinIO endpoint hostname (without protocol and port)
+    # Format: <service-name>.<namespace>.svc.cluster.local
+    # Common examples: minio.minio.svc.cluster.local, minio.default.svc.cluster.local
+    endpoint: minio.minio.svc.cluster.local
+    # Enable SSL/TLS for MinIO connection (true for https, false for http)
+    ssl: false
+    # MinIO endpoint port
+    port: 9000
 
+  ## Amazon S3 Configuration
+  ## Used for multiBucketToSingleBucket when destinationType is "s3"
+  ## Also used as destination for minioToS3 migration
+  s3:
+    # AWS region for S3 bucket
+    region: "eu-central-1"
+    # Kubernetes secret name containing S3 credentials (optional, use accessKey/secretKey if not set)
+    secretName: ""
+    # S3 access key (required if secretName is not specified)
+    accessKey: ""
+    # S3 secret key (required if secretName is not specified)
+    secretKey: ""
+    # Key names in the secret for access and secret keys
+    accessKeyName: "access-key"
+    secretKeyName: "secret-key"
+    # S3 endpoint URL
+    # Reference: https://docs.aws.amazon.com/general/latest/gr/s3.html
+    endpoint: https://s3.eu-central-1.amazonaws.com 
+
+##
+## IMAGE CONFIGURATION
+##
 image:
   repository: reportportal/migrations-complex
   tag: "1.0.0"
@@ -64,6 +132,14 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+##
+## RESOURCE CONFIGURATION
+##
+## Adjust these values to increase migration speed:
+## - Higher CPU limits allow faster parallel processing
+## - Higher memory limits enable larger batch operations
+## - For large datasets, consider: cpu: 2000m, memory: 2Gi or higher
+## - Monitor resource usage during migration and adjust accordingly
 resources:
   limits:
     cpu: 500m
@@ -71,9 +147,17 @@ resources:
   requests:
     cpu: 250m
     memory: 248Mi
+
+##
+## SERVICE CONFIGURATION
+##
 service:
   type: ClusterIP
   port: 80
+
+##
+## POD CONFIGURATION
+##
 nodeSelector: {}
 tolerations: []
 affinity: {}
@@ -88,6 +172,9 @@ securityContext: {}
   # runAsNonRoot: true
   # runAsUser: 1000
 
+##
+## SERVICE ACCOUNT CONFIGURATION
+##
 serviceAccount:
   # Specifies whether a service account should be created
   create: true
