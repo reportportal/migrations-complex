@@ -1,4 +1,4 @@
-FROM gradle:6.3-jdk11 AS build
+FROM gradle:8.12-jdk11 AS build
 ARG APP_VERSION
 WORKDIR /usr/app
 COPY . /usr/app
