@@ -560,7 +560,7 @@ database:
 - ✅ **Test migrations in a staging environment** first
 - ✅ **Stop ReportPortal** during storage migrations to avoid conflicts
 - ✅ **Monitor resource usage** and adjust limits for large datasets
-- ✅ **Verify bucket names** match between sequential migrations
+- ✅ **Verify bucket names** match between sequential migratsssions
 - ✅ **Keep migration job logs** for troubleshooting
 - ✅ **Use Kubernetes secrets** for sensitive credentials instead of plain text
 
