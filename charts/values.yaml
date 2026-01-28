@@ -149,21 +149,24 @@ resources:
     memory: 248Mi
 
 ##
-## SERVICE CONFIGURATION
-##
-service:
-  type: ClusterIP
-  port: 80
-
-##
 ## POD CONFIGURATION
 ##
+# Additional init containers to run before the main container
+# Useful for network setup, security scanning, or other initialization tasks
+# Example:
+# extraInitContainers:
+#   - name: network-setup
+#     image: busybox:1.35
+#     command: ['sh', '-c', 'echo "Setting up network..."']
+extraInitContainers: []
 nodeSelector: {}
 tolerations: []
 affinity: {}
 podAnnotations: {}
 podSecurityContext: {}
   # fsGroup: 2000
+  # seccompProfile:
+  #   type: RuntimeDefault
 securityContext: {}
   # capabilities:
   #   drop:
@@ -171,6 +174,7 @@ securityContext: {}
   # readOnlyRootFilesystem: true
   # runAsNonRoot: true
   # runAsUser: 1000
+  # allowPrivilegeEscalation: false
 
 ##
 ## SERVICE ACCOUNT CONFIGURATION

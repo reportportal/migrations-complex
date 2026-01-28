@@ -1,3 +1,7 @@
+{{- include "migrations-complex.validateMigrations" . }}
+{{- include "migrations-complex.validateDatabase" . }}
+{{- include "migrations-complex.validateMultiBucketStorage" . }}
+{{- include "migrations-complex.validateMinioToS3" . }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -5,7 +9,6 @@ metadata:
   labels:
     {{- include "migrations-complex.labels" . | nindent 4 }}
 spec:
-  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       {{- with .Values.podAnnotations }}
@@ -23,6 +26,10 @@ spec:
       serviceAccountName: {{ include "migrations-complex.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.extraInitContainers }}
+      initContainers:
+        {{- toYaml .Values.extraInitContainers | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -33,20 +40,22 @@ spec:
           # --- Database API Keys Migration ---
             - name: RP_TOKEN_MIGRATION
               value: "{{ .Values.migrations.database.apiKeys.enabled }}"
-            {{- if .Values.migrations.database.apiKeys.enabled }}
+          # --- Shared Database Configuration ---
+          # Database env vars are needed for both API Keys migration and Multi-Bucket to Single-Bucket migration
+            {{- if or .Values.migrations.database.apiKeys.enabled .Values.migrations.storage.multiBucketToSingleBucket.enabled }}
             - name: RP_DB_HOST
               value: "{{ .Values.database.endpoint }}"
             - name: RP_DB_USER
               value: "{{ .Values.database.user }}"
             - name: RP_DB_PASS
-            {{ if .Values.database.secretName }}
+              {{- if .Values.database.secretName }}
               valueFrom:
                 secretKeyRef:
                   name: "{{ .Values.database.secretName }}"
                   key: "{{ .Values.database.passwordKeyName }}"
-            {{ else }}
+              {{- else }}
               value: "{{ .Values.database.password }}"
-            {{ end }}
+              {{- end }}
             - name: RP_DB_NAME
               value: "{{ .Values.database.dbName }}"
             {{- end }}
@@ -56,22 +65,7 @@ spec:
             {{- if .Values.migrations.storage.multiBucketToSingleBucket.enabled }}
             - name: DATASTORE_TYPE
               value: "{{ .Values.migrations.storage.multiBucketToSingleBucket.destinationType }}"
-            - name: RP_DB_HOST
-              value: "{{ .Values.database.endpoint }}"
-            - name: RP_DB_USER
-              value: "{{ .Values.database.user }}"
-            - name: RP_DB_PASS
-            {{ if .Values.database.secretName }}
-              valueFrom:
-                secretKeyRef:
-                  name: "{{ .Values.database.secretName }}"
-                  key: "{{ .Values.database.passwordKeyName }}"
-            {{ else }}
-              value: "{{ .Values.database.password }}"
-              {{ end }}
-            - name: RP_DB_NAME
-              value: "{{ .Values.database.dbName }}"
-            {{ if eq .Values.migrations.storage.multiBucketToSingleBucket.destinationType "minio" }}
+            {{- if eq .Values.migrations.storage.multiBucketToSingleBucket.destinationType "minio" }}
             {{- if .Values.storage.minio.secretName }}
             - name: DATASTORE_ACCESSKEY
               valueFrom:
@@ -115,7 +109,7 @@ spec:
             - name: DATASTORE_BUCKETPREFIX
               value: "{{ .Values.migrations.storage.multiBucketToSingleBucket.buckets.projectPrefix | default "prj-" }}"
             - name: DATASTORE_DEFAULTBUCKETNAME
-              value: "{{ .Values.migrations.storage.multiBucketToSingleBucket.buckets.pluginsBucket }}" 
+              value: "{{ .Values.migrations.storage.multiBucketToSingleBucket.buckets.pluginsBucket }}"
             - name: DATASTORE_SINGLEBUCKETNAME
               value: "{{ .Values.migrations.storage.multiBucketToSingleBucket.buckets.singleBucketName }}"
             - name: DATASTORE_REGION
