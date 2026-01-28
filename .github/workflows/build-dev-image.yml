@@ -6,6 +6,7 @@ on:
       - develop
     paths-ignore:
       - README.md
+      - 'charts/**'
 
 jobs:
   variables-setup:

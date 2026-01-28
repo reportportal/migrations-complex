@@ -5,6 +5,8 @@ on:
     types: [opened, synchronize, reopened]
     branches:
       - 'develop'
+    paths-ignore:
+      - 'charts/**'
   workflow_dispatch:
     inputs:
       image-tag:
