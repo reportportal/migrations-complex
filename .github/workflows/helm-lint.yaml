@@ -1,0 +1,32 @@
+name: Helm Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'charts/**'
+
+jobs:
+  lint:
+    name: Lint Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+
+      - name: Lint chart
+        run: helm lint charts
+
+      - name: Template chart (dry-run)
+        run: |
+          helm template test ./charts \
+            --set migrations.database.apiKeys.enabled=true \
+            --set database.endpoint=postgres.test \
+            --set database.user=testuser \
+            --set database.dbName=testdb \
+            --set database.password=testpass
