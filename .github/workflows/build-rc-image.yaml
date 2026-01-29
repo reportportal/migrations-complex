@@ -3,8 +3,8 @@ name: Build RC Docker image
 on:
   push:
     branches:
-      - "rc/*"
-      - "hotfix/*"
+      - 'rc/**'
+      - 'hotfix/**'
     paths-ignore:
       - README.md
       - 'charts/**'
