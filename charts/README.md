@@ -199,7 +199,8 @@ storage:
     secretKey: <s3-secretkey>  # Required if secretName not set
     accessKeyName: "access-key"  # Key name in secret
     secretKeyName: "secret-key"  # Key name in secret
-    endpoint: https://s3.eu-central-1.amazonaws.com  # Full S3 endpoint URL
+    ssl: true  # Use https (true) or http (false) for endpoint
+    endpoint: s3.eu-central-1.amazonaws.com  # S3 host (protocol from ssl)
 ```
 
 #### Resource Configuration
@@ -280,7 +281,8 @@ storage:
   # OR
   s3:  # Use this if destinationType is "s3"
     region: "eu-central-1"
-    endpoint: https://s3.eu-central-1.amazonaws.com
+    ssl: true
+    endpoint: s3.eu-central-1.amazonaws.com
     accessKey: "your-s3-access-key"
     secretKey: "your-s3-secret-key"
 
@@ -328,7 +330,8 @@ storage:
     secretKey: "minioadmin"
   s3:
     region: "eu-central-1"
-    endpoint: https://s3.eu-central-1.amazonaws.com
+    ssl: true
+    endpoint: s3.eu-central-1.amazonaws.com
     accessKey: "your-s3-access-key"
     secretKey: "your-s3-secret-key"
 ```
@@ -378,7 +381,8 @@ storage:
     secretKey: "minioadmin"
   s3:
     region: "eu-central-1"
-    endpoint: https://s3.eu-central-1.amazonaws.com
+    ssl: true
+    endpoint: s3.eu-central-1.amazonaws.com
     accessKey: "your-s3-access-key"
     secretKey: "your-s3-secret-key"
 

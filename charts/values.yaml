@@ -116,9 +116,11 @@ storage:
     # Key names in the secret for access and secret keys
     accessKeyName: "access-key"
     secretKeyName: "secret-key"
-    # S3 endpoint URL
+    # Use HTTPS (true) or HTTP (false) for the S3 endpoint
+    ssl: true
+    # S3 endpoint host (without protocol; protocol is set by ssl above)
     # Reference: https://docs.aws.amazon.com/general/latest/gr/s3.html
-    endpoint: https://s3.eu-central-1.amazonaws.com 
+    endpoint: s3.eu-central-1.amazonaws.com 
 
 ##
 ## IMAGE CONFIGURATION
