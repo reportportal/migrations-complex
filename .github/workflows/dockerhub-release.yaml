@@ -1,0 +1,22 @@
+name: Retag RC Docker image
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  release:
+    if: >
+      github.event.review.state == 'approved'
+    uses: reportportal/.github/.github/workflows/dockerhub-release.yaml@feature/EPMRPP-110955
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      REGESTRY_USERNAME: ${{ secrets.REGESTRY_USERNAME }}
+      REGESTRY_PASSWORD: ${{ secrets.REGESTRY_PASSWORD }}
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      target-registry: docker.io
+      target-repository: reportportal/migrations-complex
+      platforms: linux/amd64
+      release-mode: rc
