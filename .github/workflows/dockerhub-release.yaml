@@ -8,7 +8,7 @@ jobs:
   release:
     if: >
       github.event.review.state == 'approved'
-    uses: reportportal/.github/.github/workflows/dockerhub-release.yaml@feature/EPMRPP-110955
+    uses: reportportal/.github/.github/workflows/dockerhub-release.yaml@main
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       REGESTRY_USERNAME: ${{ secrets.REGESTRY_USERNAME }}
