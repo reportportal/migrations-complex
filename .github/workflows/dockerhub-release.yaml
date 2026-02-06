@@ -16,7 +16,7 @@ jobs:
     with:
       aws-region: ${{ vars.AWS_REGION }}
       ecr-repository: ${{ vars.ECR_REPOSITORY }}
-      target-registry: docker.io
-      target-repository: reportportal/migrations-complex
-      platforms: linux/amd64
+      target-registry: ${{ vars.TARGET_REGISTRY || 'docker.io' }}
+      target-repository: ${{ vars.TARGET_REPOSITORY || 'reportportal/migrations-complex' }}
+      platforms: ${{ vars.BUILD_PLATFORMS }}
       release-mode: rc
