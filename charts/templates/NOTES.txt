@@ -1,2 +1,12 @@
-Report Portral Migrations Complex Service.
-Data migration service offers seamless and efficient transfer of data from multiple buckets to a single destination in either MinIO or Amazon S3, both of which provide reliable binary storage solutions. Whether you need to consolidate data from multiple sources into a central location or migrate your existing MinIO data to S3, our service ensures a smooth transition while preserving data integrity.
+ReportPortal Migrations Complex Service
+
+The migration job has been deployed. Monitor its progress with:
+
+  kubectl get jobs -n {{ .Release.Namespace }}
+  kubectl logs job/{{ include "migrations-complex.fullname" . }} -n {{ .Release.Namespace }} --follow
+
+To check job status:
+  kubectl describe job {{ include "migrations-complex.fullname" . }} -n {{ .Release.Namespace }}
+
+Note: The job will remain after completion for inspection. To clean up manually:
+  kubectl delete job {{ include "migrations-complex.fullname" . }} -n {{ .Release.Namespace }}

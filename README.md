@@ -1,118 +1,275 @@
-# migrations-complex
-ReportPortal service for different migrations
+# Migrations Complex
 
-## Copyright Notice
-Licensed under the [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0)
-license (see the LICENSE file).
+A ReportPortal service that runs database and storage migrations: API keys migration, multi-bucket to single-bucket consolidation, and MinIO-to-S3 transfer. Use it when upgrading to ReportPortal 23.3+ or changing your binary storage layout.
 
-## Installation steps
-To add this service to ReportPortal deployment you would need to
-add this to your docker-compose file:
+---
+
+## Table of contents
+
+- [Overview](#overview)
+- [Prerequisites](#prerequisites)
+- [Migration types at a glance](#migration-types-at-a-glance)
+- [Installation](#installation)
+- [Migration 1: Access tokens → API keys](#migration-1-access-tokens--api-keys)
+- [Migration 2: Multi-bucket → single bucket](#migration-2-multi-bucket--single-bucket)
+- [Migration 3: MinIO single-bucket → S3 single-bucket](#migration-3-minio-single-bucket--s3-single-bucket)
+- [End-to-end: MinIO to S3](#end-to-end-minio-to-s3)
+- [After migration: switching ReportPortal to S3](#after-migration-switching-reportportal-to-s3)
+- [License](#license)
+
+---
+
+## Overview
+
+**Migrations Complex** runs one or more migrations in a single execution. You enable the migrations you need via environment variables and deploy the service next to (or instead of) ReportPortal.
+
+| What you get | Use case |
+|--------------|----------|
+| **API keys migration** | Upgrade from pre-23.3 to 23.3+ (OAuth tokens → API keys). |
+| **Multi-bucket → single bucket** | Merge project buckets (e.g. `prj-1`, `prj-2`, `rp-bucket`) into one bucket (MinIO or S3). |
+| **MinIO → S3** | Copy data from one MinIO bucket to one S3 bucket. |
+
+You can run migrations separately or together. For a full move from MinIO to S3, run multi-bucket → single bucket first, then MinIO → S3.
+
+---
+
+## Prerequisites
+
+- ReportPortal deployment (or its database and storage available).
+- **Database**: PostgreSQL host, user, password, and database name.
+- **Storage** (for storage migrations): MinIO and/or S3 credentials and bucket names.
+- **Backup**: Take a database backup before any migration.
+
+For **Kubernetes/Helm** deployments, use the [Helm chart](charts/README.md) instead; it uses the same environment variables under the hood (see [charts/values.yaml](charts/values.yaml) for the mapping).
+
+---
+
+## Migration types at a glance
+
+| Migration | Downtime | Main env flag |
+|-----------|----------|----------------|
+| Access tokens → API keys | Yes (stop ReportPortal) | `RP_TOKEN_MIGRATION=true` |
+| Multi-bucket → single bucket | Yes (stop ReportPortal) | `RP_SINGLEBUCKET_MIGRATION=true` |
+| MinIO → S3 (single bucket) | No | `RP_MINIO_S3_MIGRATION=true` |
+
+---
+
+## Installation
+
+Add the service to your Docker Compose stack and configure it with environment variables. The variable names below match what the application (and the [Helm chart](charts/values.yaml)) expect. Replace placeholders with your real values.
+
+**Minimal example** (database only, e.g. for API keys migration):
+
+```yaml
+services:
+  migrations-complex:
+    image: reportportal/migrations-complex:latest
+    environment:
+      RP_DB_HOST: postgres
+      RP_DB_USER: rpuser
+      RP_DB_PASS: your-db-password
+      RP_DB_NAME: reportportal
+      # Enable the migrations you need (see sections below):
+      # RP_TOKEN_MIGRATION: "true"
+      # RP_SINGLEBUCKET_MIGRATION: "true"
+      # RP_MINIO_S3_MIGRATION: "true"
 ```
-    migrations-complex:
-        image: reportportal/migrations-complex:latest
-        environment:
-            ...
+
+Default bucket names used in examples (same as [charts/values.yaml](charts/values.yaml)): project prefix `prj-`, plugins bucket `rp-bucket`, single bucket `rp-storage`, S3 destination `rp-s3-storage`.
+
+Then start the stack:
+
+```bash
+docker compose up -d migrations-complex
 ```
 
-## Migrations functionality
-Currently, this service supports three migrations:
-1. [**Old tokens to API keys migration**](#old-tokens-to-api-keys-migration)
-2. [**Migration of attachments from old multi-bucket system to single-bucket**](#migration-from-multi-bucket-system-to-single-bucket)
-3. [**Migration from MinIO single-bucket to S3 single-bucket**](#migration-from-minio-single-bucket-to-s3-single-bucket)
+Check logs to confirm the migration finished:
 
-Additionally, you can combine steps 2 and 3 to migrate your attachments from MinIO to S3([MinIO to S3 migration](#minio-to-s3-migration)).
-If you want to run all migrations at once you just would need to pass corresponding environment variables with _'true'_ values.
-
-## Old tokens to API keys migration
-If you want to migrate your access tokens to API keys you need to do the following steps:
-1. Add migrations-complex to your docker-compose file(check [Installation steps](#installation-steps))
-2. Add `RP_TOKEN_MIGRATION: "true"` to your environment part
-3. Add database environment variables like this:
-```   
-   RP_DB_HOST: postgres
-   RP_DB_USER: <your-db-username>
-   RP_DB_PASS: <your-db-password>
-   RP_DB_NAME: reportportal
+```bash
+docker compose logs -f migrations-complex
 ```
-4. Deploy ReportPortal with your changes
-> **Note:** Your _oauth_access_token_ table will be dropped after the migration.
-> 
-> ⚠️This step is irreversible and will permanently delete all access tokens from the database.
 
-## Migration from multi-bucket system to single-bucket
-Mostly, this will be used just as a first step for [MinIO to S3 migration](#minio-to-s3-migration).
-> ⚠️**Note:** This step will lead to the downtime of ReportPortal as attachments table will be blocked.
+---
 
-To run this migration you would need to follow next steps:
-1. Add migrations-complex to your docker-compose file(check [Installation steps](#installation-steps))
-2. Add `RP_SINGLEBUCKET_MIGRATION: "true"` to your environment part
-3. Add database environment variables like this:
-```   
-   RP_DB_HOST: postgres
-   RP_DB_USER: <your-db-username>
-   RP_DB_PASS: <your-db-password>
-   RP_DB_NAME: reportportal
-```
-4.1 If you want to migrate in MinIO you would need to provide these environment variables:
-```   
-    DATASTORE_TYPE: minio
-    DATASTORE_ACCESSKEY: <your-minio-access-key>
-    DATASTORE_SECRETKEY: <your-minio-secret-key>
-    DATASTORE_ENDPOINT: <minio-endpoint>(e.g. http://minio:9000)
-    DATASTORE_BUCKETPREFIX: <your-prefix>(default value is prj-)
-    DATASTORE_DEFAULTBUCKETNAME: <your-default-bucket-name>(default value is rp-bucket)
-    DATASTORE_SINGLEBUCKETNAME: <your-single-bucket-name>
-```
-4.2 If you want to migrate in S3:
-```   
-    DATASTORE_TYPE: s3
-    DATASTORE_ACCESSKEY: <your-s3-access-key>
-    DATASTORE_SECRETKEY: <your-s3-secret-key>
-    DATASTORE_REGION: <your-aws-region>(e.g. us-west-1)
-    DATASTORE_BUCKETPREFIX: <your-prefix>(default value is prj-)
-    DATASTORE_DEFAULTBUCKETNAME: <your-default-bucket-name>(default value is rp-bucket)
-    DATASTORE_SINGLEBUCKETNAME: <your-single-bucket-name>
-```
-5. If you want the data in old buckets to be removed after the migration you can add `DATASTORE_REMOVE_AFTER_MIGRATION: 'true'`
-6. Deploy ReportPortal
+## Migration 1: Access tokens → API keys
 
-## Migration from MinIO single-bucket to S3 single-bucket
-Mostly, this will be used just as a second step for [MinIO to S3 migration](#minio-to-s3-migration).
-To run this migration you would need to follow next steps:
-1. Create bucket in S3
-2. Add migrations-complex to your docker-compose file(check [Installation steps](#installation-steps))
-3. Add `RP_MINIO_S3_MIGRATION: "true"` to your environment part
-4. Provide these environment variables:
-```   
-    MINIO_ENDPOINT: <your-minio-endpoint>(e.g. http://minio:9000)
-    MINIO_ACCESS_KEY: <your-minio-accesskey>
-    MINIO_SECRET_KEY: <your-minio-secretkey>
-    S3_ENDPOINT: <your-s3-endpoint> (e.g. http://s3.eu-central-1.amazonaws.com)
-    S3_ACCESS_KEY: <your-s3-accesskey>
-    S3_SECRET_KEY: <your-s3-secretkey>
-    MINIO_SINGLE_BUCKET: <name-of-minio-single-bucket>
-    S3_SINGLE_BUCKET: <name-of-s3-single-bucket>
-```
-5. Deploy **migrations-complex** service
+**When to use:** Upgrading from ReportPortal older than 23.3 to 23.3 or newer. The new version uses API keys instead of OAuth access tokens; this migration converts existing tokens in the database.
 
-## MinIO to S3 migration
-If you want to migrate your attachments from old MinIO multi-bucket system to S3 single-bucket you need to follow next steps:
-> ⚠️**Note:** Make sure that you have created S3 bucket before running migration.
+> **Warning:** This migration is **irreversible**. It drops the `oauth_access_token` table and removes all access tokens. Users will need to generate new API keys. Back up the database first.
 
-1. Go through steps 1-5 from [**Migration of attachments from old multi-bucket system to single-bucket**](#migration-from-multi-bucket-system-to-single-bucket)
-2. Go through steps 3-4 from [**Migration from MinIO single-bucket to S3 single-bucket**](#migration-from-minio-single-bucket-to-s3-single-bucket)
-3. Deploy ReportPortal with migrations-complex service
-4. After migration is completed you can update your binary storage variables in services to use s3:
-```
-   DATASTORE_TYPE: s3
-   DATASTORE_REGION: <your-aws-region>(e.g. us-west-1)
-   DATASTORE_ACCESSKEY: <your-aws-acceskey>
-   DATASTORE_SECRETKEY: <your-aws-secretkey>
-   DATASTORE_DEFAULTBUCKETNAME: <your-singlebucket-name>
-   RP_FEATURE_FLAGS: singleBucket
-   It applies for services api, authorization and jobs.
-```
-5. Redeploy ReportPortal with new S3 configuration
-> ⚠️**Note:** If you don't follow the steps properly, your integration with external systems can break, and you would need to recreate them .
+**Steps:**
 
+1. **Stop ReportPortal** (or at least ensure no one is using existing tokens during the migration).
+
+2. Add **migrations-complex** to your stack and set:
+
+```yaml
+environment:
+  RP_TOKEN_MIGRATION: "true"
+  RP_DB_HOST: postgres
+  RP_DB_USER: rpuser
+  RP_DB_PASS: your-db-password
+  RP_DB_NAME: reportportal
+```
+
+3. Start the migration service:
+
+```bash
+docker compose up -d migrations-complex
+docker compose logs -f migrations-complex
+```
+
+4. When the job completes, restart ReportPortal. Users can create new API keys from the UI.
+
+**Example (fragment):**
+
+```yaml
+migrations-complex:
+  image: reportportal/migrations-complex:latest
+  environment:
+    RP_TOKEN_MIGRATION: "true"
+    RP_DB_HOST: postgres
+    RP_DB_USER: rpuser
+    RP_DB_PASS: "${POSTGRES_PASSWORD}"
+    RP_DB_NAME: reportportal
+```
+
+---
+
+## Migration 2: Multi-bucket → single bucket
+
+**When to use:** You have multiple buckets (e.g. `prj-1`, `prj-2`, `rp-bucket`) and want one consolidated bucket. This is often the first step before [MinIO → S3](#migration-3-minio-single-bucket--s3-single-bucket).
+
+> **Warning:** ReportPortal must be **stopped** during this migration; the attachments table is blocked. Plan for downtime.
+
+**Steps:**
+
+1. **Stop ReportPortal.**
+
+2. Add **migrations-complex** with database and storage variables.
+
+3. Choose **MinIO** or **S3** as the destination and set the variables for that backend.
+
+**Option A — Destination: MinIO** (matches `migrations.storage.multiBucketToSingleBucket.destinationType: minio` and `storage.minio` in the chart):
+
+```yaml
+environment:
+  RP_SINGLEBUCKET_MIGRATION: "true"
+  RP_DB_HOST: postgres
+  RP_DB_USER: rpuser
+  RP_DB_PASS: your-db-password
+  RP_DB_NAME: reportportal
+  DATASTORE_TYPE: minio
+  DATASTORE_ACCESSKEY: minioadmin
+  DATASTORE_SECRETKEY: minioadmin
+  DATASTORE_ENDPOINT: http://minio:9000
+  DATASTORE_BUCKETPREFIX: prj-
+  DATASTORE_DEFAULTBUCKETNAME: rp-bucket
+  DATASTORE_SINGLEBUCKETNAME: rp-storage
+  # Optional: remove source buckets after migration (chart: removeSourceBuckets)
+  # DATASTORE_REMOVE_AFTER_MIGRATION: "true"
+```
+
+**Option B — Destination: S3** (matches `destinationType: s3` and `storage.s3` in the chart):
+
+```yaml
+environment:
+  RP_SINGLEBUCKET_MIGRATION: "true"
+  RP_DB_HOST: postgres
+  RP_DB_USER: rpuser
+  RP_DB_PASS: your-db-password
+  RP_DB_NAME: reportportal
+  DATASTORE_TYPE: s3
+  DATASTORE_ACCESSKEY: your-aws-access-key
+  DATASTORE_SECRETKEY: your-aws-secret-key
+  DATASTORE_REGION: eu-central-1
+  DATASTORE_BUCKETPREFIX: prj-
+  DATASTORE_DEFAULTBUCKETNAME: rp-bucket
+  DATASTORE_SINGLEBUCKETNAME: rp-storage
+```
+
+4. Deploy and monitor:
+
+```bash
+docker compose up -d migrations-complex
+docker compose logs -f migrations-complex
+```
+
+5. After completion, reconfigure ReportPortal to use the new single bucket, then start ReportPortal again.
+
+---
+
+## Migration 3: MinIO single-bucket → S3 single-bucket
+
+**When to use:** You already have one MinIO bucket (e.g. after [Migration 2](#migration-2-multi-bucket--single-bucket)) and want to copy its contents to an S3 bucket. ReportPortal can keep running; you can switch it to S3 and let the migration run in the background.
+
+**Steps:**
+
+1. **Create the target S3 bucket** in AWS (or your S3-compatible storage).
+
+2. Add **migrations-complex** with MinIO (source) and S3 (destination) settings. Bucket names match chart defaults (`migrations.storage.minioToS3.buckets`):
+
+```yaml
+environment:
+  RP_MINIO_S3_MIGRATION: "true"
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_ACCESS_KEY: minioadmin
+  MINIO_SECRET_KEY: minioadmin
+  S3_ENDPOINT: https://s3.eu-central-1.amazonaws.com
+  S3_ACCESS_KEY: your-aws-access-key
+  S3_SECRET_KEY: your-aws-secret-key
+  MINIO_SINGLE_BUCKET: rp-storage
+  S3_SINGLE_BUCKET: rp-s3-storage
+```
+
+3. Deploy and monitor:
+
+```bash
+docker compose up -d migrations-complex
+docker compose logs -f migrations-complex
+```
+
+4. When the copy is done, [switch ReportPortal to S3](#after-migration-switching-reportportal-to-s3) and remove or reconfigure the migration service.
+
+---
+
+## End-to-end: MinIO to S3
+
+To move from an existing MinIO multi-bucket setup to a single S3 bucket:
+
+1. **Create the S3 bucket** you will use as the final destination.
+
+2. **Run [Migration 2](#migration-2-multi-bucket--single-bucket)** (multi-bucket → single bucket) with **MinIO** as the destination.  
+   - Stop ReportPortal, run the migration, then reconfigure ReportPortal to use the new single MinIO bucket and start it again.
+
+3. **Run [Migration 3](#migration-3-minio-single-bucket--s3-single-bucket)** (MinIO → S3).  
+   - You can switch ReportPortal to S3 and start it; the migration can run in parallel.
+
+4. **After Migration 3 completes**, ensure all services use the S3 bucket and single-bucket settings, then remove or disable migrations-complex.
+
+> **Note:** Incorrect order or configuration can break integrations. Test in a non-production environment first and keep a database backup.
+
+---
+
+## After migration: switching ReportPortal to S3
+
+When storage has been migrated to S3, point ReportPortal services (e.g. **api**, **authorization**, **jobs**) to S3 and enable the single-bucket flag. Use the same S3 bucket name you set as `S3_SINGLE_BUCKET` (e.g. `rp-s3-storage`):
+
+```yaml
+# Example for api, authorization, jobs
+environment:
+  DATASTORE_TYPE: s3
+  DATASTORE_REGION: eu-central-1
+  DATASTORE_ACCESSKEY: your-aws-access-key
+  DATASTORE_SECRETKEY: your-aws-secret-key
+  DATASTORE_DEFAULTBUCKETNAME: rp-s3-storage
+  RP_FEATURE_FLAGS: singleBucket
+```
+
+Then redeploy those services with the new configuration.
+
+---
+
+## License
+
+Licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). See the [LICENSE](LICENSE) file in the repository.
