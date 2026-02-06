@@ -11,8 +11,8 @@ jobs:
     uses: reportportal/.github/.github/workflows/dockerhub-release.yaml@feature/EPMRPP-110955
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-      REGESTRY_USERNAME: ${{ secrets.REGESTRY_USERNAME }}
-      REGESTRY_PASSWORD: ${{ secrets.REGESTRY_PASSWORD }}
+      REGESTRY_USERNAME: ${{ secrets.DOCKERHUB_PASSWORD }}
+      REGESTRY_PASSWORD: ${{ secrets.DOCKERHUB_USERNAME }}
     with:
       aws-region: ${{ vars.AWS_REGION }}
       ecr-repository: ${{ vars.ECR_REPOSITORY }}
