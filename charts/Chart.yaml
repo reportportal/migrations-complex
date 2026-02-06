@@ -1,14 +1,21 @@
 apiVersion: v2
 name: migrations-complex
-description: Report Portral Migrations Complex Service
+description: ReportPortal Migrations Complex Service
 type: application
-version: 1.0.0
-appVersion: "1.0.0"
+version: 26.1.28
+appVersion: "1.0.1"
 sources:
   - https://github.com/reportportal/migrations-complex
 keywords:
   - reportportal
+  - migration
   - migrations-complex
+  - storage migration
 maintainers:
   - name: reportportal
     email: support@reportportal.io
+home: https://reportportal.io
+icon: https://raw.githubusercontent.com/reportportal/branding/a4e0ac59ff51e1081d4fa754f1a06f22ea6dcfe7/logo/Logo_Symbol_Large_Ogriginal.svg
+annotations:
+  category: Infrastructure
+  licenses: Apache-2.0
