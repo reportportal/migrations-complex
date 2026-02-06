@@ -5,6 +5,10 @@ on:
     branches:
       - 'rc/**'
       - 'hotfix/**'
+    paths-ignore:
+      - 'README.md'
+      - '.github/**'
+      - 'charts/**'
 
 jobs:
   variables-setup:
