@@ -10,12 +10,12 @@ jobs:
       github.event.review.state == 'approved'
     uses: reportportal/.github/.github/workflows/dockerhub-release.yaml@feature/EPMRPP-110955
     secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       REGESTRY_USERNAME: ${{ secrets.REGESTRY_USERNAME }}
       REGESTRY_PASSWORD: ${{ secrets.REGESTRY_PASSWORD }}
     with:
       aws-region: ${{ vars.AWS_REGION }}
-      aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
-      ecr-repository: ${{ secrets.ECR_REPOSITORY }}
+      ecr-repository: ${{ vars.ECR_REPOSITORY }}
       target-registry: docker.io
       target-repository: reportportal/migrations-complex
       platforms: linux/amd64
