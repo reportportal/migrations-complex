@@ -15,6 +15,7 @@ A ReportPortal service that runs database and storage migrations: API keys migra
 - [Migration 3: MinIO single-bucket → S3 single-bucket](#migration-3-minio-single-bucket--s3-single-bucket)
 - [End-to-end: MinIO to S3](#end-to-end-minio-to-s3)
 - [After migration: switching ReportPortal to S3](#after-migration-switching-reportportal-to-s3)
+- [Running Migrations with Docker Compose](#running-migrations-with-docker-compose)
 - [License](#license)
 
 ---
@@ -267,6 +268,88 @@ environment:
 ```
 
 Then redeploy those services with the new configuration.
+
+---
+
+# Running Migrations with Docker Compose
+
+Below is the recommended Docker Compose setup aligned with Helm chart parameters.
+
+## 1. docker-compose.yaml
+
+```yaml
+version: "3.9"
+
+services:
+  migrations-complex:
+    image: reportportal/migrations-complex:1.0.0
+    environment:
+      RP_TOKEN_MIGRATION: ${RP_TOKEN_MIGRATION}
+      RP_SINGLEBUCKET_MIGRATION: ${RP_SINGLEBUCKET_MIGRATION}
+      RP_MINIO_S3_MIGRATION: ${RP_MINIO_S3_MIGRATION}
+      RP_DB_HOST: ${RP_DB_HOST}
+      RP_DB_USER: ${RP_DB_USER}
+      RP_DB_PASS: ${RP_DB_PASS}
+      RP_DB_NAME: ${RP_DB_NAME}
+      DATASTORE_TYPE: ${DATASTORE_TYPE}
+      DATASTORE_REMOVE_AFTER_MIGRATION: ${DATASTORE_REMOVE_AFTER_MIGRATION}
+      DATASTORE_BUCKETPREFIX: ${DATASTORE_BUCKETPREFIX}
+      DATASTORE_DEFAULTBUCKETNAME: ${DATASTORE_DEFAULTBUCKETNAME}
+      DATASTORE_SINGLEBUCKETNAME: ${DATASTORE_SINGLEBUCKETNAME}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_SINGLE_BUCKET: ${MINIO_SINGLE_BUCKET}
+      MINIO_USE_SSL: ${MINIO_USE_SSL}
+      DATASTORE_REGION: ${DATASTORE_REGION}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_SINGLE_BUCKET: ${S3_SINGLE_BUCKET}
+      S3_USE_SSL: ${S3_USE_SSL}
+    restart: "no"
+```
+
+---
+
+## 2. `.env` Template
+
+```env
+RP_TOKEN_MIGRATION=false
+RP_SINGLEBUCKET_MIGRATION=false
+RP_MINIO_S3_MIGRATION=false
+RP_DB_HOST=postgres
+RP_DB_USER=rpuser
+RP_DB_PASS=
+RP_DB_NAME=reportportal
+DATASTORE_TYPE=minio
+DATASTORE_REMOVE_AFTER_MIGRATION=false
+DATASTORE_BUCKETPREFIX=prj-
+DATASTORE_DEFAULTBUCKETNAME=rp-bucket
+DATASTORE_SINGLEBUCKETNAME=rp-storage
+MINIO_ENDPOINT=http://minio:9000
+MINIO_ACCESS_KEY=
+MINIO_SECRET_KEY=
+MINIO_USE_SSL=false
+MINIO_SINGLE_BUCKET=rp-storage
+DATASTORE_REGION=eu-central-1
+S3_ENDPOINT=https://s3.eu-central-1.amazonaws.com
+S3_ACCESS_KEY=
+S3_SECRET_KEY=
+S3_SINGLE_BUCKET=rp-s3-storage
+S3_USE_SSL=true
+```
+
+---
+
+## 3. Running
+
+```bash
+docker compose up migrations-complex
+docker compose logs -f migrations-complex
+```
+
+The container stops automatically when the migration finishes.
 
 ---
 
