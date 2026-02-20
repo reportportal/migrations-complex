@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  migrations-complex:
+    image: reportportal/migrations-complex:latest
+    # If you want to build locally instead of using Docker Hub, uncomment:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+
+    environment:
+      # -----------------------------
+      # Database (required for all migrations)
+      # -----------------------------
+      RP_DB_HOST: ${RP_DB_HOST}
+      RP_DB_USER: ${RP_DB_USER}
+      RP_DB_PASS: ${RP_DB_PASS}
+      RP_DB_NAME: ${RP_DB_NAME}
+
+      # -----------------------------
+      # Enable the migration(s) you need
+      # -----------------------------
+      # RP_TOKEN_MIGRATION: "true"
+      # RP_SINGLEBUCKET_MIGRATION: "true"
+      # RP_MINIO_S3_MIGRATION: "true"
+
+      # -----------------------------
+      # Storage settings (when needed)
+      # -----------------------------
+
+      # MinIO or S3 source for multi-bucket → single-bucket
+      DATASTORE_TYPE: ${DATASTORE_TYPE}           # minio | s3
+      DATASTORE_ACCESSKEY: ${DATASTORE_ACCESSKEY}
+      DATASTORE_SECRETKEY: ${DATASTORE_SECRETKEY}
+      DATASTORE_ENDPOINT: ${DATASTORE_ENDPOINT}
+      DATASTORE_REGION: ${DATASTORE_REGION}
+      DATASTORE_BUCKETPREFIX: ${DATASTORE_BUCKETPREFIX}
+      DATASTORE_DEFAULTBUCKETNAME: ${DATASTORE_DEFAULTBUCKETNAME}
+      DATASTORE_SINGLEBUCKETNAME: ${DATASTORE_SINGLEBUCKETNAME}
+      DATASTORE_REMOVE_AFTER_MIGRATION: ${DATASTORE_REMOVE_AFTER_MIGRATION}
+
+      # MinIO → S3 migration
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_SINGLE_BUCKET: ${MINIO_SINGLE_BUCKET}
+
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_SINGLE_BUCKET: ${S3_SINGLE_BUCKET}
+
+    restart: "no"
