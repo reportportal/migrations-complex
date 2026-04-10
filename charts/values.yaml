@@ -73,6 +73,9 @@ database:
   dbName: reportportal
   # Database password (required if secretName is not specified)
   password: ""
+  # Maximum HikariCP connection pool size
+  # Default: 20
+  maximumPoolSize: 20
 
 ##
 ## STORAGE CONFIGURATION
@@ -149,6 +152,26 @@ resources:
   requests:
     cpu: 250m
     memory: 248Mi
+
+##
+## MIGRATION PERFORMANCE CONFIGURATION
+## Adjust these values to optimize migration performance
+##
+migration:
+  # Number of parallel threads for migration operations
+  # Higher values increase speed but require more memory
+  # Default: 8
+  parallelism: 8
+  # Number of records processed in each batch
+  # Higher values reduce database overhead but require more memory
+  # Default: 200000
+  batchSize: 200000
+
+##
+## JVM CONFIGURATION
+## Adjust JVM settings for optimal migration performance
+##
+jvmArgs: "-Xmx4g -XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=70"
 
 ##
 ## POD CONFIGURATION

@@ -164,6 +164,15 @@ spec:
             - name: S3_SINGLE_BUCKET
               value: "{{ .Values.migrations.storage.minioToS3.buckets.destinationBucket }}"
             {{- end }}
+          # --- Migration Performance Configuration ---
+            - name: MIGRATION_PARALLELISM
+              value: "{{ .Values.migration.parallelism }}"
+            - name: MIGRATION_BATCH_SIZE
+              value: "{{ .Values.migration.batchSize }}"
+            - name: RP_DATASOURCE_MAXIMUMPOOLSIZE
+              value: "{{ .Values.database.maximumPoolSize }}"
+            - name: JAVA_OPTS
+              value: "{{ .Values.jvmArgs }}"
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
