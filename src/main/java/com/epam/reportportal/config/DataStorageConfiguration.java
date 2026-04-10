@@ -18,25 +18,38 @@ public class DataStorageConfiguration {
 
   @Bean
   @ConditionalOnProperty(name = "datastore.type", havingValue = "minio")
-  public S3AsyncClient minioClient(@Value("${datastore.accessKey}") String accessKey,
+  public S3AsyncClient minioClient(
+      @Value("${datastore.accessKey}") String accessKey,
       @Value("${datastore.secretKey}") String secretKey,
       @Value("${datastore.endpoint}") String endpoint,
-      @Value("${datastore.region}") String region) {
-    return S3AsyncClient.crtBuilder().credentialsProvider(
+      @Value("${datastore.region}") String region,
+      @Value("${migration.s3.target-throughput-gbps:20.0}") double targetThroughputGbps,
+      @Value("${migration.s3.min-part-size-mb:8}") long minPartSizeMb) {
+    return S3AsyncClient.crtBuilder()
+        .credentialsProvider(
             StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretKey)))
-        .targetThroughputInGbps(20.0).minimumPartSizeInBytes(8 * MB).forcePathStyle(true)
-        .region(Region.of(region)).endpointOverride(URI.create(endpoint)).build();
+        .targetThroughputInGbps(targetThroughputGbps)
+        .minimumPartSizeInBytes(minPartSizeMb * MB)
+        .forcePathStyle(true)
+        .region(Region.of(region))
+        .endpointOverride(URI.create(endpoint))
+        .build();
   }
 
   @Bean
   @ConditionalOnProperty(name = "datastore.type", havingValue = "s3")
-  public S3AsyncClient s3Client(@Value("${datastore.accessKey}") String accessKey,
+  public S3AsyncClient s3Client(
+      @Value("${datastore.accessKey}") String accessKey,
       @Value("${datastore.secretKey}") String secretKey,
-      @Value("${datastore.region}") String region) {
-    return S3AsyncClient.crtBuilder().credentialsProvider(
+      @Value("${datastore.region}") String region,
+      @Value("${migration.s3.target-throughput-gbps:20.0}") double targetThroughputGbps,
+      @Value("${migration.s3.min-part-size-mb:8}") long minPartSizeMb) {
+    return S3AsyncClient.crtBuilder()
+        .credentialsProvider(
             StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretKey)))
-        .targetThroughputInGbps(20.0).minimumPartSizeInBytes(8 * MB).region(Region.of(region))
+        .targetThroughputInGbps(targetThroughputGbps)
+        .minimumPartSizeInBytes(minPartSizeMb * MB)
+        .region(Region.of(region))
         .build();
-
   }
 }

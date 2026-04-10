@@ -26,7 +26,7 @@ rp:
     jdbcUrl: ${rp.db.url}
     username: ${rp.db.user}
     password: ${rp.db.pass}
-    maximumPoolSize: 12
+    maximumPoolSize: ${rp.datasource.maximumPoolSize:20}
 
   db:
     url: jdbc:postgresql://${rp.db.host}:${rp.db.port}/${rp.db.name}
@@ -49,3 +49,16 @@ datastore:
   remove:
     after:
       migration: false
+
+migration:
+  batch:
+    size: 200000
+  parallelism: 8
+  retry:
+    max: 3
+    base-delay-ms: 1000
+  progress:
+    log-interval: 1000
+  s3:
+    target-throughput-gbps: 20.0
+    min-part-size-mb: 8
