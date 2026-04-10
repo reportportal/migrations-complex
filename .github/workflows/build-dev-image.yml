@@ -31,7 +31,8 @@ jobs:
     with:
       aws-region: ${{ vars.AWS_REGION }}
       image-tag: 'develop-${{ github.run_number }}'
-      ecr-repository: ${{ vars.ECR_REPOSITORY }}
+      ecr-repository: reportportal/migrations-complex
+      build-platforms: ${{ vars.BUILD_PLATFORMS || 'linux/amd64,linux/arm64' }}
       additional-tag: 'develop-latest'
       version: 'develop-${{ github.run_number }}'
       date: ${{ needs.variables-setup.outputs.date }}

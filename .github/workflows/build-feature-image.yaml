@@ -54,5 +54,6 @@ jobs:
       branch: ${{ github.head_ref != '' && github.head_ref || github.ref_name }}
       date: ${{ needs.variables-setup.outputs.date }}
       ecr-repository: reportportal/migrations-complex
+      build-platforms: ${{ vars.BUILD_PLATFORMS || 'linux/amd64,linux/arm64' }}
       runs-on: ubuntu-latest
     secrets: inherit

@@ -38,11 +38,11 @@ jobs:
     uses: reportportal/.github/.github/workflows/build-docker-image.yaml@main
     with:
       aws-region: ${{ vars.AWS_REGION }}
-      ecr-repository: ${{ vars.ECR_REPOSITORY }}
+      ecr-repository: reportportal/migrations-complex
       image-tag: ${{ needs.variables-setup.outputs.tag }}
       release-mode: false
       additional-tag: 'latest'
-      build-platforms: ${{ needs.variables-setup.outputs.platforms }}
+      build-platforms: ${{ vars.BUILD_PLATFORMS || 'linux/amd64,linux/arm64' }}
       version: ${{ needs.variables-setup.outputs.version }}
       date: ${{ needs.variables-setup.outputs.date }}
       runs-on: ubuntu-latest
