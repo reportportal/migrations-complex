@@ -168,6 +168,14 @@ migration:
   batchSize: 200000
 
 ##
+## JOB CONFIGURATION
+##
+## Number of retries for the job
+## Default: 0
+##
+backoffLimit: 0
+
+##
 ## JVM CONFIGURATION
 ## Adjust JVM settings for optimal migration performance
 ##
