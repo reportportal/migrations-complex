@@ -9,6 +9,7 @@ metadata:
   labels:
     {{- include "migrations-complex.labels" . | nindent 4 }}
 spec:
+  backoffLimit: {{ .Values.backoffLimit | default 0 }}
   template:
     metadata:
       {{- with .Values.podAnnotations }}
