@@ -65,8 +65,13 @@ public class PreFlightCheckService implements MigrationService {
     stateRepo.ensureTable();
 
     if (singleBucketMigrationEnabled) {
-      checkSourceBuckets();
-      checkDestinationBucket();
+      if (minioToS3MigrationEnabled) {
+        checkSourceBuckets();
+        checkDestinationBucket();
+      } else {
+        logger.info("[S3] Skipping source/destination permission checks because "
+            + "'rp.minio.s3.migration' is disabled");
+      }
     }
 
     if (minioToS3MigrationEnabled) {
