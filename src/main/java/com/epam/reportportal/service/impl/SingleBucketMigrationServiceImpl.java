@@ -1168,7 +1168,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
    */
   private final class AttachmentRowUpdateBuffer {
 
-    private static final class QueuedAttachmentRow {
+    private final class QueuedAttachmentRow {
       final long attachmentId;
       final String encodedDest;
       final MigrationState state;
