@@ -38,6 +38,12 @@ import java.util.stream.Collectors;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.json.JSONObject;
@@ -80,14 +86,6 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 public class SingleBucketMigrationServiceImpl implements MigrationService {
 
   private static final String MIGRATION_TYPE = "SINGLE_BUCKET";
-
-  private static final String DISCOVER_PROJECTS =
-      "SELECT project_id, COUNT(id) AS cnt FROM public.attachment"
-          + " WHERE creation_date < ? GROUP BY project_id ORDER BY cnt DESC";
-
-  private static final String SELECT_ATTACHMENTS_KEYSET =
-      "SELECT id, file_id, thumbnail_id, project_id FROM public.attachment"
-          + " WHERE project_id = ? AND id > ? AND creation_date < ? ORDER BY id LIMIT ?";
 
   private static final String PROJECT_PREFIX = "project-data/";
   private static final String USERS_MULTIBUCKET_NAME = "users";
@@ -145,6 +143,16 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   private final MigrationStateRepository stateRepo;
   private final ExecutorService copyExecutor;
 
+  /** Validated column name on {@code public.attachment} used in cutoff predicates (configurable). */
+  private final String attachmentCreationDateColumn;
+  private final String discoverProjectsSql;
+  private final String selectAttachmentsKeysetSql;
+  /**
+   * When blank, attachment cutoff is {@link Instant#now()} when project-data migration starts.
+   * When set, parsed by {@link #resolveAttachmentCutoffInstant()} (ISO-8601, epoch millis, or UTC local).
+   */
+  private final String attachmentCutoffRaw;
+
   public SingleBucketMigrationServiceImpl(
       S3MigrationClients clients,
       JdbcTemplate jdbcTemplate,
@@ -160,6 +168,8 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       @Value("${migration.retry.base-delay-ms:1000}") long retryBaseDelayMs,
       @Value("${migration.progress.log-interval:5000}") int progressLogInterval,
       @Value("${migration.db.attachment-update-batch-size:1000}") int attachmentUpdateBatchSize,
+      @Value("${migration.db.attachment-creation-date-column:creation_date}") String attachmentCreationDateColumn,
+      @Value("${migration.db.attachment-cutoff:}") String attachmentCutoffRaw,
       @Value("${migration.s3.verify-destination-after-copy:true}") boolean verifyDestinationAfterCopy,
       @Value("${migration.s3.head-source-before-copy:true}") boolean headSourceBeforeCopy,
       @Value("${migration.storage.max-in-memory-copy-mb:128}") double maxInMemoryCopyMb,
@@ -179,6 +189,14 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     this.retryBaseDelayMs = retryBaseDelayMs;
     this.progressLogInterval = progressLogInterval;
     this.attachmentUpdateBatchSize = Math.max(1, attachmentUpdateBatchSize);
+    this.attachmentCreationDateColumn = requireSqlIdentifier(attachmentCreationDateColumn, "migration.db.attachment-creation-date-column");
+    this.discoverProjectsSql =
+        "SELECT project_id, COUNT(id) AS cnt FROM public.attachment WHERE "
+            + this.attachmentCreationDateColumn + " < ? GROUP BY project_id ORDER BY cnt DESC";
+    this.selectAttachmentsKeysetSql =
+        "SELECT id, file_id, thumbnail_id, project_id FROM public.attachment WHERE project_id = ? AND id > ? AND "
+            + this.attachmentCreationDateColumn + " < ? ORDER BY id LIMIT ?";
+    this.attachmentCutoffRaw = attachmentCutoffRaw;
     this.verifyDestinationAfterCopy = verifyDestinationAfterCopy;
     this.headSourceBeforeCopy = headSourceBeforeCopy;
     this.maxInMemoryCopyBytes = Math.max(0L, Math.round(maxInMemoryCopyMb * 1024.0 * 1024.0));
@@ -190,10 +208,69 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         : null;
     logger.info("Migration configured: batchSize={}, parallelism={}, intraProjectParallelism={}, maxRetries={}, "
             + "retryBaseDelayMs={}, progressLogInterval={}, attachmentUpdateBatchSize={}, "
-            + "verifyDestinationAfterCopy={}, headSourceBeforeCopy={}, maxInMemoryCopyMb={}, destinationRegion={}",
+            + "attachmentCreationDateColumn={}, attachmentCutoff={}, verifyDestinationAfterCopy={}, "
+            + "headSourceBeforeCopy={}, maxInMemoryCopyMb={}, destinationRegion={}",
         batchSize, parallelism, this.intraProjectParallelism, maxRetries, retryBaseDelayMs,
-        progressLogInterval, this.attachmentUpdateBatchSize, verifyDestinationAfterCopy,
-        headSourceBeforeCopy, maxInMemoryCopyMb, destinationRegion);
+        progressLogInterval, this.attachmentUpdateBatchSize, this.attachmentCreationDateColumn,
+        StringUtils.isBlank(attachmentCutoffRaw) ? "<unset → Instant.now() at project-data start>"
+            : attachmentCutoffRaw,
+        verifyDestinationAfterCopy, headSourceBeforeCopy, maxInMemoryCopyMb, destinationRegion);
+  }
+
+  /**
+   * Allows only unquoted PostgreSQL identifiers (letters, digits, underscore) to keep dynamic SQL safe.
+   */
+  private static String requireSqlIdentifier(String raw, String propertyName) {
+    if (StringUtils.isBlank(raw)) {
+      throw new IllegalArgumentException(propertyName + " must not be blank");
+    }
+    String trimmed = raw.trim();
+    if (!trimmed.matches("[a-zA-Z_][a-zA-Z0-9_]*")) {
+      throw new IllegalArgumentException(propertyName + " must be a simple SQL identifier, got: " + raw);
+    }
+    return trimmed;
+  }
+
+  /**
+   * Empty config → {@link Instant#now()} when project-data migration runs. Otherwise: ISO-8601 instant
+   * ({@code 2026-03-26T18:31:59.509Z}), offset datetime, epoch milliseconds, or {@code yyyy-MM-dd HH:mm:ss[.SSS]}
+   * interpreted as UTC.
+   */
+  private Instant resolveAttachmentCutoffInstant() {
+    if (StringUtils.isBlank(attachmentCutoffRaw)) {
+      return Instant.now();
+    }
+    return parseAttachmentCutoffToInstant(attachmentCutoffRaw.trim());
+  }
+
+  private static Instant parseAttachmentCutoffToInstant(String s) {
+    try {
+      return Instant.parse(s);
+    } catch (DateTimeParseException ignored) {
+      // try other formats
+    }
+    try {
+      return OffsetDateTime.parse(s).toInstant();
+    } catch (DateTimeParseException ignored) {
+    }
+    if (s.matches("\\d{1,18}")) {
+      return Instant.ofEpochMilli(Long.parseLong(s));
+    }
+    DateTimeFormatter[] utcLocalFormatters = {
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"),
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SS"),
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.S"),
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    };
+    for (DateTimeFormatter f : utcLocalFormatters) {
+      try {
+        return LocalDateTime.parse(s, f).atZone(ZoneOffset.UTC).toInstant();
+      } catch (DateTimeParseException ignored) {
+      }
+    }
+    throw new IllegalArgumentException(
+        "migration.db.attachment-cutoff must be empty, epoch millis, ISO-8601 instant, offset datetime, "
+            + "or yyyy-MM-dd HH:mm:ss[.SSS] (UTC). Got: " + s);
   }
 
   @Override
@@ -442,17 +519,19 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
   private void migrateProjectData() {
 
-    // Single cutoff for this run: only rows with creation_date strictly before this instant are migrated.
-    Timestamp attachmentCutoff = new Timestamp(System.currentTimeMillis());
+    Instant cutoffInstant = resolveAttachmentCutoffInstant();
+    Timestamp attachmentCutoff = Timestamp.from(cutoffInstant);
 
     // ── Discovery: query DB for projects that actually have attachments ──
 
-    List<long[]> projectStats = jdbcTemplate.query(DISCOVER_PROJECTS, (rs, row) ->
+    List<long[]> projectStats = jdbcTemplate.query(discoverProjectsSql, (rs, row) ->
         new long[]{rs.getLong("project_id"), rs.getLong("cnt")}, attachmentCutoff);
 
     logger.info(">>> PROJECT ATTACHMENTS MIGRATION — DISCOVERY PHASE");
-    logger.info("Attachment selection: creation_date < {} (fixed at project-data migration start)",
-        attachmentCutoff);
+    logger.info("Attachment selection: {} < {} (cutoff instant={}{})",
+        attachmentCreationDateColumn, attachmentCutoff, cutoffInstant,
+        StringUtils.isBlank(attachmentCutoffRaw) ? ", resolved at project-data start"
+            : ", from migration.db.attachment-cutoff");
     logger.info("Found {} projects with attachments in the database:", projectStats.size());
 
     long totalAttachmentsInDb = 0;
@@ -538,7 +617,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
     while (true) {
       List<Attachment> batch = jdbcTemplate.query(
-          SELECT_ATTACHMENTS_KEYSET, new AttachmentRowMapper(),
+          selectAttachmentsKeysetSql, new AttachmentRowMapper(),
           projectId, lastId, attachmentCutoff, batchSize);
 
       if (batch.isEmpty()) {

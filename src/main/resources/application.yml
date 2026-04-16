@@ -55,6 +55,12 @@ migration:
     log-interval: 5000
   db:
     attachment-update-batch-size: 1000
+    # Column on public.attachment for migration cutoff; env: MIGRATION_DB_ATTACHMENT_CREATION_DATE_COLUMN
+    attachment-creation-date-column: creation_date
+    # Cutoff instant (optional). Empty = Instant.now() when project-data migration starts.
+    # Else: ISO-8601 (2026-03-26T18:31:59.509Z), epoch millis, or yyyy-MM-dd HH:mm:ss[.SSS] as UTC.
+    # Env: MIGRATION_DB_ATTACHMENT_CUTOFF
+    attachment-cutoff: ""
   s3:
     target-throughput-gbps: 20.0
     min-part-size-mb: 8

@@ -117,6 +117,10 @@ spec:
               value: "{{ .Values.migration.progressLogInterval }}"
             - name: MIGRATION_DB_ATTACHMENT_UPDATE_BATCH_SIZE
               value: "{{ .Values.migration.attachmentUpdateBatchSize }}"
+            - name: MIGRATION_DB_ATTACHMENT_CREATION_DATE_COLUMN
+              value: "{{ .Values.migration.attachmentCreationDateColumn }}"
+            - name: MIGRATION_DB_ATTACHMENT_CUTOFF
+              value: "{{ .Values.migration.attachmentCutoff }}"
             - name: MIGRATION_S3_VERIFY_DESTINATION_AFTER_COPY
               value: "{{ .Values.migration.verifyDestinationAfterCopy }}"
             - name: MIGRATION_S3_HEAD_SOURCE_BEFORE_COPY

@@ -45,6 +45,10 @@ migration:
   batchSize: 500000
   progressLogInterval: 5000
   attachmentUpdateBatchSize: 1000
+  # Column name on public.attachment for creation-date cutoff (maps to MIGRATION_DB_ATTACHMENT_CREATION_DATE_COLUMN)
+  attachmentCreationDateColumn: creation_date
+  # Max creation time to migrate (UTC / ISO-8601 / epoch ms). Empty = use JVM "now" at project-data start (MIGRATION_DB_ATTACHMENT_CUTOFF)
+  attachmentCutoff: ""
   verifyDestinationAfterCopy: true
   headSourceBeforeCopy: true
 
