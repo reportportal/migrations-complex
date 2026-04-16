@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -69,7 +70,10 @@ import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
+import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
@@ -946,9 +950,18 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         logger.warn("No source bucket found for plugin id={}", plugin.getId());
         continue;
       }
-      String destKey = PLUGINS_PREFIX + pluginPath;
+      Optional<String> resolvedSrc = resolvePluginSourceObjectKey(sourceBucket, pluginPath);
+      if (!resolvedSrc.isPresent()) {
+        logger.warn("PLUGIN_SOURCE_UNRESOLVED: entityId={} logicalId='{}' — no object in s3://{}/ "
+                + "(try exact key, or root JAR named '{}-<version>.jar' / '{}.jar')",
+            plugin.getId(), pluginPath, sourceBucket, pluginPath, pluginPath);
+        metrics.incrementSourceNotFound();
+        continue;
+      }
+      String srcKey = resolvedSrc.get();
+      String destKey = PLUGINS_PREFIX + srcKey;
 
-      trackAndCopy("plugin", plugin.getId(), sourceBucket, pluginPath,
+      trackAndCopy("plugin", plugin.getId(), sourceBucket, srcKey,
           singleBucketName, destKey, metrics);
 
       JSONObject detailsJson = new JSONObject(plugin.getDetails());
@@ -956,7 +969,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       jdbcTemplate.update(UPDATE_PLUGIN_DETAILS, detailsJson.toString(), plugin.getId());
 
       if (removeAfterMigration) {
-        deleteFile(pluginPath, sourceBucket);
+        deleteFile(srcKey, sourceBucket);
       }
     }
     if (removeAfterMigration) {
@@ -1157,6 +1170,66 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       return null;
     }
     return detailsJson.getJSONObject("details").getString("id");
+  }
+
+  /**
+   * Resolves the real MinIO object key for a plugin. The DB often stores a logical id (e.g. {@code jira},
+   * {@code quality gate}) while the default bucket stores versioned JARs at the bucket root
+   * (e.g. {@code jira-5.13.1.jar}, {@code quality gate-5.13.1.jar}). Tries exact key first, then lists
+   * by prefix and picks a matching {@code .jar} at root.
+   */
+  private Optional<String> resolvePluginSourceObjectKey(String sourceBucket, String logicalId) {
+    if (StringUtils.isBlank(logicalId)) {
+      return Optional.empty();
+    }
+    if (tryHeadSourceContentLength(sourceBucket, logicalId).isPresent()) {
+      return Optional.of(logicalId);
+    }
+    List<String> matches = new ArrayList<>();
+    String continuationToken = null;
+    do {
+      ListObjectsV2Request.Builder req = ListObjectsV2Request.builder()
+          .bucket(sourceBucket)
+          .prefix(logicalId)
+          .maxKeys(1000);
+      if (continuationToken != null) {
+        req.continuationToken(continuationToken);
+      }
+      ListObjectsV2Response resp = clients.getSource().listObjectsV2(req.build()).join();
+      for (S3Object obj : resp.contents()) {
+        String key = obj.key();
+        if (isPluginJarKeyForLogicalId(logicalId, key)) {
+          matches.add(key);
+        }
+      }
+      continuationToken = Boolean.TRUE.equals(resp.isTruncated()) ? resp.nextContinuationToken() : null;
+    } while (continuationToken != null);
+
+    if (matches.isEmpty()) {
+      return Optional.empty();
+    }
+    if (matches.size() > 1) {
+      matches.sort(Comparator.reverseOrder());
+      logger.warn("Multiple plugin JARs for logical id '{}', using '{}' (also: {})",
+          logicalId, matches.get(0), matches.subList(1, matches.size()));
+    }
+    String chosen = matches.get(0);
+    logger.debug("Resolved plugin logical id '{}' to source key '{}'", logicalId, chosen);
+    return Optional.of(chosen);
+  }
+
+  /**
+   * Bucket-root layout: {@code <logicalId>-<semver>.jar} or {@code <logicalId>.jar}; no path segments.
+   */
+  private static boolean isPluginJarKeyForLogicalId(String logicalId, String key) {
+    if (key.indexOf('/') >= 0) {
+      return false;
+    }
+    if (!key.endsWith(".jar")) {
+      return false;
+    }
+    return key.equals(logicalId + ".jar")
+        || key.startsWith(logicalId + "-");
   }
 
   private boolean isPluginAlreadyMigrated(String pluginPath) {
