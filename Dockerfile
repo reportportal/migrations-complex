@@ -1,8 +1,12 @@
 FROM gradle:8.12-jdk11 AS build
-ARG APP_VERSION
+# Default avoids empty -Dorg.gradle.project.version= when buildx omits --build-arg
+ARG APP_VERSION=0.0.1-SNAPSHOT
 WORKDIR /usr/app
 COPY . /usr/app
-RUN gradle build --exclude-task test -Dorg.gradle.project.version=${APP_VERSION} \
+# Use bootJar instead of build: `build` runs check (SpotBugs, etc.) which often fails CI/buildx
+# without excluding those tasks; bootJar only produces the executable fat jar.
+RUN chmod +x gradlew \
+    && ./gradlew bootJar -Dorg.gradle.project.version=${APP_VERSION} \
     && cp build/libs/*-exec.jar /usr/app/application.jar
 
 FROM amazoncorretto:11.0.30
