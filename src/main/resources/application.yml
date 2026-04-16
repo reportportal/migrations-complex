@@ -1,24 +1,7 @@
 rp:
-  elasticsearch:
-    host: #http://elasticsearch:9200
-    username: #elastic
-    password: #elastic1q2w3e
-  migration:
-    elastic:
-      #Time before which logs should be migrated
-      #For example '2022-07-21T09:00:00'
-      startDate:
-      #Maximum number of logs migrated at once
-      logsNumber:
-  token:
-    migration: false
-  singlebucket:
-    migration: false
-  elastic:
-    migration: false
-  minio:
-    s3:
-      migration: false
+  # Enable the only migration this service runs: MinIO multi-bucket → AWS S3 single bucket.
+  storage:
+    migration: true
 
   datasource:
     type: com.zaxxer.hikari.HikariDataSource
@@ -35,12 +18,8 @@ rp:
     user: rpuser
     pass: rppass
 
+# Logical bucket layout and destination bucket name (S3).
 datastore:
-  type:
-  accessKey:
-  secretKey:
-  endpoint:
-  region: eu-west-1
   bucketPrefix: prj-
   defaultBucketName: rp-bucket
   singleBucketName:
@@ -50,15 +29,34 @@ datastore:
     after:
       migration: false
 
+# MinIO (source) and AWS S3 (destination) credentials for the SDK clients.
 migration:
+  storage:
+    source:
+      accessKey: ""
+      secretKey: ""
+      endpoint: "http://minio:9000"
+      region: us-east-1
+    destination:
+      accessKey: ""
+      secretKey: ""
+      region: eu-central-1
+      endpoint: ""
+    max-in-memory-copy-mb: 128
   batch:
-    size: 200000
+    size: 500000
+  intra-project:
+    parallelism: 16
   parallelism: 8
   retry:
     max: 3
     base-delay-ms: 1000
   progress:
-    log-interval: 1000
+    log-interval: 5000
+  db:
+    attachment-update-batch-size: 1000
   s3:
     target-throughput-gbps: 20.0
     min-part-size-mb: 8
+    verify-destination-after-copy: true
+    head-source-before-copy: true

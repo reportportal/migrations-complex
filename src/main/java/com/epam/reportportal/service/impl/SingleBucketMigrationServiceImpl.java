@@ -1,5 +1,6 @@
 package com.epam.reportportal.service.impl;
 
+import com.epam.reportportal.config.S3MigrationClients;
 import com.epam.reportportal.logging.LogMigration;
 import com.epam.reportportal.model.Attachment;
 import com.epam.reportportal.model.CopyResult;
@@ -14,20 +15,31 @@ import com.epam.reportportal.utils.PluginRowMapper;
 import com.epam.reportportal.utils.UserRowMapper;
 import com.google.common.collect.Iterables;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,8 +48,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.annotation.Order;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import software.amazon.awssdk.core.async.AsyncRequestBody;
+import software.amazon.awssdk.core.async.AsyncResponseTransformer;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
-import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.BucketLocationConstraint;
+import software.amazon.awssdk.services.s3.model.CreateBucketConfiguration;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 import software.amazon.awssdk.services.s3.model.CreateBucketResponse;
 import software.amazon.awssdk.services.s3.model.Delete;
@@ -45,32 +60,34 @@ import software.amazon.awssdk.services.s3.model.DeleteBucketRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
-import software.amazon.awssdk.transfer.s3.S3TransferManager;
-import software.amazon.awssdk.transfer.s3.model.Copy;
-import software.amazon.awssdk.transfer.s3.model.CopyRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 
 /**
- * Migrates attachments from per-project buckets (multi-bucket) into a single destination bucket.
- * Only copies objects that exist in both the database and the source storage.
- * Uses atomic copy-verify-then-update pattern with retry and persistent state tracking.
+ * MinIO multi-bucket → AWS S3 single bucket in one run: reads project buckets and the shared buckets on
+ * MinIO, writes into {@code datastore.singleBucketName} on S3 using GET + PUT. Updates DB paths after each
+ * successful object upload. Optional {@code migration.s3.*} flags tune HEAD behaviour.
+ * <p>
+ * Parallelism: {@code migration.intra-project.parallelism} and {@code migration.parallelism}.
  */
 @Service
-@Order(3)
-@ConditionalOnProperty(name = "rp.singlebucket.migration", havingValue = "true")
+@Order(1)
+@ConditionalOnProperty(name = "rp.storage.migration", havingValue = "true")
 public class SingleBucketMigrationServiceImpl implements MigrationService {
 
   private static final String MIGRATION_TYPE = "SINGLE_BUCKET";
 
   private static final String DISCOVER_PROJECTS =
       "SELECT project_id, COUNT(id) AS cnt FROM public.attachment"
-          + " GROUP BY project_id ORDER BY cnt DESC";
+          + " WHERE creation_date < ? GROUP BY project_id ORDER BY cnt DESC";
 
   private static final String SELECT_ATTACHMENTS_KEYSET =
       "SELECT id, file_id, thumbnail_id, project_id FROM public.attachment"
-          + " WHERE project_id = ? AND id > ? ORDER BY id LIMIT ?";
+          + " WHERE project_id = ? AND id > ? AND creation_date < ? ORDER BY id LIMIT ?";
 
   private static final String PROJECT_PREFIX = "project-data/";
   private static final String USERS_MULTIBUCKET_NAME = "users";
@@ -104,15 +121,32 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   private final int maxRetries;
   private final long retryBaseDelayMs;
   private final int progressLogInterval;
+  /** Batched JDBC updates for attachment file_id / thumbnail_id after successful S3 copy; 1 = row-by-row. */
+  private final int attachmentUpdateBatchSize;
+  /** If true, HEAD destination after each successful copy (extra latency; strongest verify). */
+  private final boolean verifyDestinationAfterCopy;
+  /** If true, HEAD source before copy when object not known complete (extra latency; avoids failed copy). */
+  private final boolean headSourceBeforeCopy;
+  /** Objects at or below this size are buffered in memory for GET+PUT; larger use a temp file. */
+  private final long maxInMemoryCopyBytes;
+  /** AWS region of the destination bucket (used when creating the bucket; {@code us-east-1} omits location constraint). */
+  private final String destinationRegion;
+  /**
+   * Concurrent attachment rows processed per project (separate pool from {@link #parallelism}).
+   * Use &gt;1 for many small files; total S3/DB load scales roughly with
+   * {@code parallelism × intraProjectParallelism}.
+   */
+  private final int intraProjectParallelism;
+  /** Dedicated pool for {@link #intraProjectParallelism}; null when intraProjectParallelism is 1. */
+  private final ExecutorService intraProjectExecutor;
 
-  private final S3AsyncClient s3Client;
-  private final S3TransferManager transferManager;
+  private final S3MigrationClients clients;
   private final JdbcTemplate jdbcTemplate;
   private final MigrationStateRepository stateRepo;
   private final ExecutorService copyExecutor;
 
   public SingleBucketMigrationServiceImpl(
-      S3AsyncClient s3Client,
+      S3MigrationClients clients,
       JdbcTemplate jdbcTemplate,
       MigrationStateRepository stateRepo,
       @Value("${datastore.bucketPrefix}") String bucketPrefix,
@@ -120,15 +154,20 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       @Value("${datastore.singleBucketName}") String singleBucketName,
       @Value("${datastore.secrets.path}") String secretsPath,
       @Value("#{new Boolean('${datastore.remove.after.migration}')}") Boolean removeAfterMigration,
-      @Value("${migration.batch.size:200000}") int batchSize,
+      @Value("${migration.batch.size:500000}") int batchSize,
       @Value("${migration.parallelism:8}") int parallelism,
       @Value("${migration.retry.max:3}") int maxRetries,
       @Value("${migration.retry.base-delay-ms:1000}") long retryBaseDelayMs,
-      @Value("${migration.progress.log-interval:1000}") int progressLogInterval) {
+      @Value("${migration.progress.log-interval:5000}") int progressLogInterval,
+      @Value("${migration.db.attachment-update-batch-size:1000}") int attachmentUpdateBatchSize,
+      @Value("${migration.s3.verify-destination-after-copy:true}") boolean verifyDestinationAfterCopy,
+      @Value("${migration.s3.head-source-before-copy:true}") boolean headSourceBeforeCopy,
+      @Value("${migration.storage.max-in-memory-copy-mb:128}") double maxInMemoryCopyMb,
+      @Value("${migration.storage.destination.region}") String destinationRegion,
+      @Value("${migration.intra-project.parallelism:1}") int intraProjectParallelism) {
     this.jdbcTemplate = jdbcTemplate;
     this.stateRepo = stateRepo;
-    this.s3Client = s3Client;
-    this.transferManager = S3TransferManager.builder().s3Client(s3Client).build();
+    this.clients = clients;
     this.bucketPrefix = bucketPrefix;
     this.defaultBucketName = defaultBucketName;
     this.singleBucketName = singleBucketName;
@@ -139,13 +178,26 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     this.maxRetries = maxRetries;
     this.retryBaseDelayMs = retryBaseDelayMs;
     this.progressLogInterval = progressLogInterval;
+    this.attachmentUpdateBatchSize = Math.max(1, attachmentUpdateBatchSize);
+    this.verifyDestinationAfterCopy = verifyDestinationAfterCopy;
+    this.headSourceBeforeCopy = headSourceBeforeCopy;
+    this.maxInMemoryCopyBytes = Math.max(0L, Math.round(maxInMemoryCopyMb * 1024.0 * 1024.0));
+    this.destinationRegion = destinationRegion;
+    this.intraProjectParallelism = Math.max(1, intraProjectParallelism);
     this.copyExecutor = Executors.newFixedThreadPool(parallelism);
-    logger.info("Migration configured: batchSize={}, parallelism={}, maxRetries={}, retryBaseDelayMs={}, progressLogInterval={}",
-        batchSize, parallelism, maxRetries, retryBaseDelayMs, progressLogInterval);
+    this.intraProjectExecutor = this.intraProjectParallelism > 1
+        ? Executors.newFixedThreadPool(this.intraProjectParallelism)
+        : null;
+    logger.info("Migration configured: batchSize={}, parallelism={}, intraProjectParallelism={}, maxRetries={}, "
+            + "retryBaseDelayMs={}, progressLogInterval={}, attachmentUpdateBatchSize={}, "
+            + "verifyDestinationAfterCopy={}, headSourceBeforeCopy={}, maxInMemoryCopyMb={}, destinationRegion={}",
+        batchSize, parallelism, this.intraProjectParallelism, maxRetries, retryBaseDelayMs,
+        progressLogInterval, this.attachmentUpdateBatchSize, verifyDestinationAfterCopy,
+        headSourceBeforeCopy, maxInMemoryCopyMb, destinationRegion);
   }
 
   @Override
-  @LogMigration("Migration from multi-bucket to single-bucket")
+  @LogMigration("MinIO multi-bucket to S3 single-bucket storage migration")
   public void migrate() {
     if (StringUtils.isEmpty(singleBucketName)) {
       logger.warn("singleBucketName is empty, skipping migration");
@@ -167,13 +219,24 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
   private void shutdownExecutor() {
     copyExecutor.shutdown();
+    if (intraProjectExecutor != null) {
+      intraProjectExecutor.shutdown();
+    }
     try {
       if (!copyExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
         logger.warn("Copy executor did not terminate in 30s, forcing shutdown");
         copyExecutor.shutdownNow();
       }
+      if (intraProjectExecutor != null
+          && !intraProjectExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
+        logger.warn("Intra-project executor did not terminate in 60s, forcing shutdown");
+        intraProjectExecutor.shutdownNow();
+      }
     } catch (InterruptedException e) {
       copyExecutor.shutdownNow();
+      if (intraProjectExecutor != null) {
+        intraProjectExecutor.shutdownNow();
+      }
       Thread.currentThread().interrupt();
     }
   }
@@ -181,68 +244,136 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   // ---- destination bucket ----
 
   private void ensureDestinationBucket() {
-    if (!bucketExists(singleBucketName)) {
-      CreateBucketResponse resp = s3Client.createBucket(
-          CreateBucketRequest.builder().bucket(singleBucketName).build()
-      ).join();
-      if (resp.sdkHttpResponse().isSuccessful()) {
-        logger.info("Created destination bucket '{}'", singleBucketName);
-      } else {
-        throw new IllegalStateException(
-            "Failed to create destination bucket: " + singleBucketName);
-      }
+    if (bucketExists(singleBucketName, clients.getDestination())) {
+      return;
+    }
+    CreateBucketRequest.Builder req = CreateBucketRequest.builder().bucket(singleBucketName);
+    if (destinationRegion != null && !destinationRegion.isEmpty()
+        && !"us-east-1".equals(destinationRegion)) {
+      req.createBucketConfiguration(CreateBucketConfiguration.builder()
+          .locationConstraint(BucketLocationConstraint.fromValue(destinationRegion))
+          .build());
+    }
+    CreateBucketResponse resp = clients.getDestination().createBucket(req.build()).join();
+    if (resp.sdkHttpResponse().isSuccessful()) {
+      logger.info("Created destination S3 bucket '{}' in region {}", singleBucketName, destinationRegion);
+    } else {
+      throw new IllegalStateException("Failed to create destination bucket: " + singleBucketName);
     }
   }
 
-  // ---- source existence check ----
+  // ---- source metadata ----
 
-  private boolean sourceObjectExists(String bucket, String key) {
+  /** Empty if object does not exist or HEAD failed. */
+  private Optional<Long> tryHeadSourceContentLength(String bucket, String key) {
     try {
-      s3Client.headObject(
+      HeadObjectResponse r = clients.getSource().headObject(
           HeadObjectRequest.builder().bucket(bucket).key(key).build()
       ).join();
-      return true;
+      return Optional.of(r.contentLength());
     } catch (Exception e) {
-      return false;
+      return Optional.empty();
     }
   }
 
-  // ---- core copy with verify + retry ----
+  /**
+   * True when the exception chain indicates the source object is missing (HTTP 404 / NoSuchKey).
+   */
+  private boolean isSourceNotFoundError(Throwable e) {
+    Throwable cur = e;
+    while (cur != null) {
+      if (cur instanceof S3Exception) {
+        S3Exception se = (S3Exception) cur;
+        if (se.statusCode() == 404) {
+          return true;
+        }
+        if (se.awsErrorDetails() != null) {
+          String code = se.awsErrorDetails().errorCode();
+          if ("NoSuchKey".equals(code) || "NotFound".equals(code)) {
+            return true;
+          }
+        }
+      }
+      cur = cur.getCause();
+    }
+    return false;
+  }
 
-  private CopyResult copyWithVerify(String srcBucket, String srcKey,
-      String destBucket, String destKey) {
+  // ---- MinIO → S3 object copy (GET + PUT) with verify + retry ----
+
+  /**
+   * Copies one object from MinIO to S3 (cross-endpoint; no server-side CopyObject).
+   */
+  private CopyResult copyMinioToS3WithVerify(String srcBucket, String srcKey,
+      String destBucket, String destKey, Optional<Long> sourceContentLength) {
     for (int attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        CopyObjectRequest copyReq = CopyObjectRequest.builder()
-            .sourceBucket(srcBucket).sourceKey(srcKey)
-            .destinationBucket(destBucket).destinationKey(destKey)
-            .build();
+        Optional<Long> len = sourceContentLength;
+        if (!len.isPresent()) {
+          len = tryHeadSourceContentLength(srcBucket, srcKey);
+        }
+        if (!len.isPresent()) {
+          return CopyResult.missingSource();
+        }
+        long size = len.get();
+        transferObjectCrossStorage(srcBucket, srcKey, destBucket, destKey, size);
 
-        Copy copy = transferManager.copy(
-            CopyRequest.builder().copyObjectRequest(copyReq).build());
-        copy.completionFuture().join();
-
-        HeadObjectResponse head = s3Client.headObject(
-            HeadObjectRequest.builder().bucket(destBucket).key(destKey).build()
-        ).join();
-
-        return CopyResult.success(head.contentLength());
+        if (verifyDestinationAfterCopy) {
+          HeadObjectResponse head = clients.getDestination().headObject(
+              HeadObjectRequest.builder().bucket(destBucket).key(destKey).build()
+          ).join();
+          return CopyResult.success(head.contentLength());
+        }
+        return CopyResult.success(size);
 
       } catch (Exception e) {
+        if (isSourceNotFoundError(e)) {
+          return CopyResult.missingSource();
+        }
         String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
         if (attempt < maxRetries) {
           long delay = retryBaseDelayMs * (1L << (attempt - 1));
-          logger.warn("Copy attempt {}/{} failed for s3://{}/{} : {} — retrying in {}ms",
+          logger.warn("MinIO→S3 copy attempt {}/{} failed for s3://{}/{} : {} — retrying in {}ms",
               attempt, maxRetries, srcBucket, srcKey, msg, delay);
           sleep(delay);
         } else {
-          logger.error("Copy FAILED after {} attempts for s3://{}/{} : {}",
+          logger.error("MinIO→S3 copy FAILED after {} attempts for s3://{}/{} : {}",
               maxRetries, srcBucket, srcKey, msg);
           return CopyResult.failure(msg);
         }
       }
     }
     return CopyResult.failure("exhausted retries");
+  }
+
+  private void transferObjectCrossStorage(String srcBucket, String srcKey,
+      String destBucket, String destKey, long size) throws java.io.IOException {
+    if (maxInMemoryCopyBytes > 0 && size <= maxInMemoryCopyBytes) {
+      var bytes = clients.getSource().getObject(
+          GetObjectRequest.builder().bucket(srcBucket).key(srcKey).build(),
+          AsyncResponseTransformer.toBytes()).join();
+      clients.getDestination().putObject(
+          PutObjectRequest.builder().bucket(destBucket).key(destKey).build(),
+          AsyncRequestBody.fromBytes(bytes.asByteArray())).join();
+      return;
+    }
+    Path tmp = Files.createTempFile("rp-migr-", ".bin");
+    try {
+      clients.getSource().getObject(
+          GetObjectRequest.builder().bucket(srcBucket).key(srcKey).build(),
+          AsyncResponseTransformer.toFile(tmp)).join();
+      clients.getDestination().putObject(
+          PutObjectRequest.builder().bucket(destBucket).key(destKey).build(),
+          AsyncRequestBody.fromFile(tmp)).join();
+    } finally {
+      Files.deleteIfExists(tmp);
+    }
+  }
+
+  private void putStateInCache(Map<String, MigrationState> cache, String srcKey, MigrationState state) {
+    if (cache != null) {
+      cache.put(srcKey, state);
+    }
   }
 
   private void trackAndCopy(String entityType, Long entityId,
@@ -258,17 +389,21 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       return;
     }
 
-    if (!sourceObjectExists(srcBucket, srcKey)) {
-      logger.warn("SOURCE_NOT_FOUND: {} entityId={} does not exist at s3://{}/{} — skipping",
-          entityType, entityId, srcBucket, srcKey);
-      MigrationState state = existing.orElseGet(() ->
-          new MigrationState(MIGRATION_TYPE, entityType, entityId,
-              srcBucket, srcKey, destBucket, destKey));
-      state.setStatus("SKIPPED");
-      state.setErrorMessage("Source object not found in storage");
-      stateRepo.save(state);
-      metrics.incrementSourceNotFound();
-      return;
+    Optional<Long> srcLen = Optional.empty();
+    if (headSourceBeforeCopy || maxInMemoryCopyBytes > 0) {
+      srcLen = tryHeadSourceContentLength(srcBucket, srcKey);
+      if (!srcLen.isPresent()) {
+        logger.warn("SOURCE_NOT_FOUND: {} entityId={} does not exist at s3://{}/{} — skipping",
+            entityType, entityId, srcBucket, srcKey);
+        MigrationState state = existing.orElseGet(() ->
+            new MigrationState(MIGRATION_TYPE, entityType, entityId,
+                srcBucket, srcKey, destBucket, destKey));
+        state.setStatus("SKIPPED");
+        state.setErrorMessage("Source object not found in storage");
+        stateRepo.save(state);
+        metrics.incrementSourceNotFound();
+        return;
+      }
     }
 
     MigrationState state = existing.orElseGet(() ->
@@ -277,7 +412,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     state.setStatus("IN_PROGRESS");
     stateRepo.save(state);
 
-    CopyResult result = copyWithVerify(srcBucket, srcKey, destBucket, destKey);
+    CopyResult result = copyMinioToS3WithVerify(srcBucket, srcKey, destBucket, destKey, srcLen);
 
     if (result.isSuccess()) {
       state.setStatus("COMPLETED");
@@ -285,6 +420,13 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       state.setErrorMessage(null);
       stateRepo.save(state);
       metrics.incrementCopied();
+    } else if (result.isMissingSource()) {
+      logger.warn("SOURCE_NOT_FOUND: {} entityId={} — copy failed (missing source) s3://{}/{}",
+          entityType, entityId, srcBucket, srcKey);
+      state.setStatus("SKIPPED");
+      state.setErrorMessage("Source object not found in storage");
+      stateRepo.save(state);
+      metrics.incrementSourceNotFound();
     } else {
       logger.error("MIGRATION_FAILED: {} entityId={} — source=s3://{}/{} dest=s3://{}/{} — {}",
           entityType, entityId, srcBucket, srcKey, destBucket, destKey, result.getErrorMessage());
@@ -300,12 +442,17 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
   private void migrateProjectData() {
 
+    // Single cutoff for this run: only rows with creation_date strictly before this instant are migrated.
+    Timestamp attachmentCutoff = new Timestamp(System.currentTimeMillis());
+
     // ── Discovery: query DB for projects that actually have attachments ──
 
     List<long[]> projectStats = jdbcTemplate.query(DISCOVER_PROJECTS, (rs, row) ->
-        new long[]{rs.getLong("project_id"), rs.getLong("cnt")});
+        new long[]{rs.getLong("project_id"), rs.getLong("cnt")}, attachmentCutoff);
 
     logger.info(">>> PROJECT ATTACHMENTS MIGRATION — DISCOVERY PHASE");
+    logger.info("Attachment selection: creation_date < {} (fixed at project-data migration start)",
+        attachmentCutoff);
     logger.info("Found {} projects with attachments in the database:", projectStats.size());
 
     long totalAttachmentsInDb = 0;
@@ -316,7 +463,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       long count = row[1];
       totalAttachmentsInDb += count;
       String srcBucket = bucketPrefix + projectId;
-      boolean exists = bucketExists(srcBucket);
+      boolean exists = bucketExists(srcBucket, clients.getSource());
       logger.info("  project_id={} \tattachments={} \tsource_bucket='{}' \texists={}",
           projectId, count, srcBucket, exists);
       if (exists) {
@@ -352,7 +499,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
       CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
         MigrationMetrics projectMetrics = migrateOneProject(
-            projectId, attachmentCount, projectIndex, totalProjects);
+            projectId, attachmentCount, projectIndex, totalProjects, attachmentCutoff);
         globalMetrics.mergeFrom(projectMetrics);
         long done = completedProjects.incrementAndGet();
         logger.info("  Overall progress: {}/{} projects completed", done, totalProjects);
@@ -374,7 +521,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
    * Uses keyset pagination (WHERE id > lastId) for stable performance on large tables.
    */
   private MigrationMetrics migrateOneProject(long projectId, long attachmentCount,
-      int projectIndex, long totalProjects) {
+      int projectIndex, long totalProjects, Timestamp attachmentCutoff) {
     String srcBucket = bucketPrefix + projectId;
     MigrationMetrics metrics = new MigrationMetrics();
     long startTimeMs = System.currentTimeMillis();
@@ -382,27 +529,57 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     logger.info(">>> PROJECT {} MIGRATION STARTED [{}/{}] — {} attachments in DB, source bucket '{}'",
         projectId, projectIndex, totalProjects, attachmentCount, srcBucket);
 
+    AttachmentRowUpdateBuffer attachmentRowBuffer =
+        attachmentUpdateBatchSize > 1 ? new AttachmentRowUpdateBuffer() : null;
+
     long lastId = 0;
     int batchNumber = 0;
-    long processed = 0;
+    AtomicLong processed = new AtomicLong(0);
 
     while (true) {
       List<Attachment> batch = jdbcTemplate.query(
           SELECT_ATTACHMENTS_KEYSET, new AttachmentRowMapper(),
-          projectId, lastId, batchSize);
+          projectId, lastId, attachmentCutoff, batchSize);
 
       if (batch.isEmpty()) {
         break;
       }
 
       batchNumber++;
-      for (Attachment att : batch) {
-        migrateAttachmentSafe(att, srcBucket, projectId, metrics);
-        processed++;
-        if (processed % progressLogInterval == 0 || processed == 1) {
-          logger.info("  Project {} progress: {}/{} attachments processed ({})",
-              projectId, processed, attachmentCount, metrics.summary());
+      if (intraProjectParallelism <= 1) {
+        for (Attachment att : batch) {
+          migrateAttachmentSafe(att, srcBucket, projectId, metrics, attachmentRowBuffer, null);
+          long p = processed.incrementAndGet();
+          if (p % progressLogInterval == 0 || p == 1) {
+            logger.info("  Project {} progress: {}/{} attachments processed ({})",
+                projectId, p, attachmentCount, metrics.summary());
+          }
         }
+      } else {
+        for (int i = 0; i < batch.size(); i += intraProjectParallelism) {
+          int end = Math.min(i + intraProjectParallelism, batch.size());
+          List<Attachment> waveAttachments = batch.subList(i, end);
+          Map<String, MigrationState> waveCache = buildWaveStateCache(srcBucket, waveAttachments);
+          List<CompletableFuture<Void>> wave = new ArrayList<>(end - i);
+          for (int j = i; j < end; j++) {
+            final Attachment att = batch.get(j);
+            final Map<String, MigrationState> cacheForWave = waveCache;
+            wave.add(CompletableFuture.runAsync(() -> {
+              migrateAttachmentSafe(att, srcBucket, projectId, metrics, attachmentRowBuffer,
+                  cacheForWave);
+              long p = processed.incrementAndGet();
+              if (p % progressLogInterval == 0 || p == 1) {
+                logger.info("  Project {} progress: {}/{} attachments processed ({})",
+                    projectId, p, attachmentCount, metrics.summary());
+              }
+            }, intraProjectExecutor));
+          }
+          CompletableFuture.allOf(wave.toArray(new CompletableFuture[0])).join();
+        }
+      }
+
+      if (attachmentRowBuffer != null) {
+        attachmentRowBuffer.flushAll();
       }
 
       lastId = batch.get(batch.size() - 1).getId();
@@ -418,12 +595,17 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       }
     }
 
+    if (attachmentRowBuffer != null) {
+      attachmentRowBuffer.flushAll();
+    }
+
     if (removeAfterMigration) {
       deleteBucket(srcBucket);
     }
 
+    long processedTotal = processed.get();
     long elapsedSec = (System.currentTimeMillis() - startTimeMs) / 1000;
-    double rate = processed > 0 ? (double) processed / Math.max(elapsedSec, 1) : 0;
+    double rate = processedTotal > 0 ? (double) processedTotal / Math.max(elapsedSec, 1) : 0;
     logger.info("<<< PROJECT {} MIGRATION FINISHED [{}/{}] in {}s — {} — rate={} att/s",
         projectId, projectIndex, totalProjects, elapsedSec, metrics.summary(),
         String.format("%.1f", rate));
@@ -432,20 +614,40 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   }
 
   private void migrateAttachmentSafe(Attachment attachment, String srcBucket,
-      Long projectId, MigrationMetrics metrics) {
-    if (attachment.getFileId() != null) {
-      migrateOneFile(attachment, attachment.getFileId(),
-          UPDATE_ATTACHMENT_FILE_ID, srcBucket, projectId, "file", metrics);
-    }
-    if (attachment.getThumbnailId() != null) {
-      migrateOneFile(attachment, attachment.getThumbnailId(),
-          UPDATE_ATTACHMENT_THUMBNAIL_ID, srcBucket, projectId, "thumbnail", metrics);
+      Long projectId, MigrationMetrics metrics, AttachmentRowUpdateBuffer attachmentRowBuffer,
+      Map<String, MigrationState> stateCache) {
+    boolean parallelFileAndThumb = intraProjectParallelism > 1
+        && attachment.getFileId() != null
+        && attachment.getThumbnailId() != null;
+    if (parallelFileAndThumb) {
+      Executor pool = intraProjectExecutor != null ? intraProjectExecutor : ForkJoinPool.commonPool();
+      CompletableFuture<Void> fileFuture = CompletableFuture.runAsync(() ->
+          migrateOneFile(attachment, attachment.getFileId(),
+              UPDATE_ATTACHMENT_FILE_ID, srcBucket, projectId, "file", metrics, attachmentRowBuffer,
+              stateCache), pool);
+      CompletableFuture<Void> thumbFuture = CompletableFuture.runAsync(() ->
+          migrateOneFile(attachment, attachment.getThumbnailId(),
+              UPDATE_ATTACHMENT_THUMBNAIL_ID, srcBucket, projectId, "thumbnail", metrics,
+              attachmentRowBuffer, stateCache), pool);
+      CompletableFuture.allOf(fileFuture, thumbFuture).join();
+    } else {
+      if (attachment.getFileId() != null) {
+        migrateOneFile(attachment, attachment.getFileId(),
+            UPDATE_ATTACHMENT_FILE_ID, srcBucket, projectId, "file", metrics, attachmentRowBuffer,
+            stateCache);
+      }
+      if (attachment.getThumbnailId() != null) {
+        migrateOneFile(attachment, attachment.getThumbnailId(),
+            UPDATE_ATTACHMENT_THUMBNAIL_ID, srcBucket, projectId, "thumbnail", metrics,
+            attachmentRowBuffer, stateCache);
+      }
     }
   }
 
   private void migrateOneFile(Attachment attachment, String encodedFilePath,
       String updateSql, String srcBucket, Long projectId,
-      String fileType, MigrationMetrics metrics) {
+      String fileType, MigrationMetrics metrics, AttachmentRowUpdateBuffer attachmentRowBuffer,
+      Map<String, MigrationState> stateCache) {
     String filePath = decode(encodedFilePath);
 
     if (PROJECT_PREFIX.equals(getPathFirstPart(filePath) + "/")) {
@@ -458,8 +660,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     String srcKey = cutPath(filePath);
     String destKey = PROJECT_PREFIX + filePath;
 
-    Optional<MigrationState> existing =
-        stateRepo.findByKey(MIGRATION_TYPE, srcBucket, srcKey);
+    Optional<MigrationState> existing = lookupExistingState(srcBucket, srcKey, stateCache);
     if (existing.isPresent() && "COMPLETED".equals(existing.get().getStatus())) {
       logger.debug("SKIP_STATE_COMPLETED: attachment_id={} project={} type={} s3://{}/{}",
           attachment.getId(), projectId, fileType, srcBucket, srcKey);
@@ -467,18 +668,23 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       return;
     }
 
-    if (!sourceObjectExists(srcBucket, srcKey)) {
-      logger.warn("SOURCE_NOT_FOUND: attachment_id={} project={} type={} — "
-              + "object does not exist at s3://{}/{} — skipping (DB record exists but storage object is missing)",
-          attachment.getId(), projectId, fileType, srcBucket, srcKey);
-      MigrationState state = existing.orElseGet(() ->
-          new MigrationState(MIGRATION_TYPE, fileType, attachment.getId(),
-              srcBucket, srcKey, singleBucketName, destKey));
-      state.setStatus("SKIPPED");
-      state.setErrorMessage("Source object not found in storage");
-      stateRepo.save(state);
-      metrics.incrementSourceNotFound();
-      return;
+    Optional<Long> srcLen = Optional.empty();
+    if (headSourceBeforeCopy || maxInMemoryCopyBytes > 0) {
+      srcLen = tryHeadSourceContentLength(srcBucket, srcKey);
+      if (!srcLen.isPresent()) {
+        logger.warn("SOURCE_NOT_FOUND: attachment_id={} project={} type={} — "
+                + "object does not exist at s3://{}/{} — skipping (DB record exists but storage object is missing)",
+            attachment.getId(), projectId, fileType, srcBucket, srcKey);
+        MigrationState state = existing.orElseGet(() ->
+            new MigrationState(MIGRATION_TYPE, fileType, attachment.getId(),
+                srcBucket, srcKey, singleBucketName, destKey));
+        state.setStatus("SKIPPED");
+        state.setErrorMessage("Source object not found in storage");
+        stateRepo.save(state);
+        putStateInCache(stateCache, srcKey, state);
+        metrics.incrementSourceNotFound();
+        return;
+      }
     }
 
     MigrationState state = existing.orElseGet(() ->
@@ -486,19 +692,34 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
             srcBucket, srcKey, singleBucketName, destKey));
     state.setStatus("IN_PROGRESS");
     stateRepo.save(state);
+    putStateInCache(stateCache, srcKey, state);
 
-    CopyResult result = copyWithVerify(srcBucket, srcKey, singleBucketName, destKey);
+    CopyResult result = copyMinioToS3WithVerify(srcBucket, srcKey, singleBucketName, destKey, srcLen);
 
     if (result.isSuccess()) {
-      jdbcTemplate.update(updateSql, encode(destKey), attachment.getId());
-      state.setStatus("COMPLETED");
-      state.setErrorMessage(null);
-      state.setAttempts(state.getAttempts() + 1);
-      stateRepo.save(state);
       metrics.incrementCopied();
       logger.debug("COPIED: attachment_id={} project={} type={} — s3://{}/{} → s3://{}/{} ({}B)",
           attachment.getId(), projectId, fileType,
           srcBucket, srcKey, singleBucketName, destKey, result.getDestSize());
+      if (attachmentRowBuffer == null) {
+        jdbcTemplate.update(updateSql, encode(destKey), attachment.getId());
+        state.setStatus("COMPLETED");
+        state.setErrorMessage(null);
+        state.setAttempts(state.getAttempts() + 1);
+        stateRepo.save(state);
+        putStateInCache(stateCache, srcKey, state);
+      } else {
+        attachmentRowBuffer.enqueueSuccess(updateSql, attachment.getId(), encode(destKey), state);
+      }
+    } else if (result.isMissingSource()) {
+      logger.warn("SOURCE_NOT_FOUND: attachment_id={} project={} type={} — "
+              + "object missing at s3://{}/{} after copy attempt",
+          attachment.getId(), projectId, fileType, srcBucket, srcKey);
+      state.setStatus("SKIPPED");
+      state.setErrorMessage("Source object not found in storage");
+      stateRepo.save(state);
+      putStateInCache(stateCache, srcKey, state);
+      metrics.incrementSourceNotFound();
     } else {
       logger.error("MIGRATION_FAILED: attachment_id={} project={} type={} — "
               + "source=s3://{}/{} dest=s3://{}/{} — error: {}",
@@ -508,6 +729,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       state.setAttempts(state.getAttempts() + maxRetries);
       state.setErrorMessage(result.getErrorMessage());
       stateRepo.save(state);
+      putStateInCache(stateCache, srcKey, state);
       metrics.incrementFailed();
     }
   }
@@ -573,18 +795,22 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       return;
     }
 
-    if (!sourceObjectExists(srcBucket, srcKey)) {
-      logger.warn("SOURCE_NOT_FOUND: user_id={} type={} — "
-              + "object does not exist at s3://{}/{} — skipping",
-          userId, fileType, srcBucket, srcKey);
-      MigrationState state = existing.orElseGet(() ->
-          new MigrationState(MIGRATION_TYPE, fileType, userId,
-              srcBucket, srcKey, singleBucketName, destKey));
-      state.setStatus("SKIPPED");
-      state.setErrorMessage("Source object not found in storage");
-      stateRepo.save(state);
-      metrics.incrementSourceNotFound();
-      return;
+    Optional<Long> srcLen = Optional.empty();
+    if (headSourceBeforeCopy || maxInMemoryCopyBytes > 0) {
+      srcLen = tryHeadSourceContentLength(srcBucket, srcKey);
+      if (!srcLen.isPresent()) {
+        logger.warn("SOURCE_NOT_FOUND: user_id={} type={} — "
+                + "object does not exist at s3://{}/{} — skipping",
+            userId, fileType, srcBucket, srcKey);
+        MigrationState state = existing.orElseGet(() ->
+            new MigrationState(MIGRATION_TYPE, fileType, userId,
+                srcBucket, srcKey, singleBucketName, destKey));
+        state.setStatus("SKIPPED");
+        state.setErrorMessage("Source object not found in storage");
+        stateRepo.save(state);
+        metrics.incrementSourceNotFound();
+        return;
+      }
     }
 
     MigrationState state = existing.orElseGet(() ->
@@ -593,7 +819,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     state.setStatus("IN_PROGRESS");
     stateRepo.save(state);
 
-    CopyResult result = copyWithVerify(srcBucket, srcKey, singleBucketName, destKey);
+    CopyResult result = copyMinioToS3WithVerify(srcBucket, srcKey, singleBucketName, destKey, srcLen);
 
     if (result.isSuccess()) {
       jdbcTemplate.update(sql, encode(destKey), userId);
@@ -604,6 +830,13 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       metrics.incrementCopied();
       logger.debug("COPIED: user_id={} type={} — s3://{}/{} → s3://{}/{} ({}B)",
           userId, fileType, srcBucket, srcKey, singleBucketName, destKey, result.getDestSize());
+    } else if (result.isMissingSource()) {
+      logger.warn("SOURCE_NOT_FOUND: user_id={} type={} — object missing at s3://{}/{} after copy attempt",
+          userId, fileType, srcBucket, srcKey);
+      state.setStatus("SKIPPED");
+      state.setErrorMessage("Source object not found in storage");
+      stateRepo.save(state);
+      metrics.incrementSourceNotFound();
     } else {
       logger.error("MIGRATION_FAILED: user_id={} type={} — "
               + "source=s3://{}/{} dest=s3://{}/{} — error: {}",
@@ -692,9 +925,40 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     List<CompletableFuture<Void>> futures = new ArrayList<>(failed.size());
     for (MigrationState item : failed) {
       CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-        if (!sourceObjectExists(item.getSourceBucket(), item.getSourceKey())) {
+        Optional<Long> srcLen = Optional.empty();
+        if (headSourceBeforeCopy || maxInMemoryCopyBytes > 0) {
+          srcLen = tryHeadSourceContentLength(item.getSourceBucket(), item.getSourceKey());
+          if (!srcLen.isPresent()) {
+            logger.warn("RETRY_SOURCE_NOT_FOUND: entityType={} entityId={} — "
+                    + "s3://{}/{} still does not exist — marking as SKIPPED",
+                item.getEntityType(), item.getEntityId(),
+                item.getSourceBucket(), item.getSourceKey());
+            item.setStatus("SKIPPED");
+            item.setErrorMessage("Source object not found on retry");
+            stateRepo.save(item);
+            stillFailed.incrementAndGet();
+            long pos = processed.incrementAndGet();
+            if (pos % 100 == 0 || pos == 1) {
+              logger.info("  Retry progress: {}/{} (recovered={}, still_failed={})",
+                  pos, total, recovered.get(), stillFailed.get());
+            }
+            return;
+          }
+        }
+        CopyResult result = copyMinioToS3WithVerify(
+            item.getSourceBucket(), item.getSourceKey(),
+            item.getDestBucket(), item.getDestKey(), srcLen);
+        if (result.isSuccess()) {
+          item.setStatus("COMPLETED");
+          item.setErrorMessage(null);
+          stateRepo.save(item);
+          recovered.incrementAndGet();
+          logger.info("RETRY_RECOVERED: entityType={} entityId={} — s3://{}/{}",
+              item.getEntityType(), item.getEntityId(),
+              item.getSourceBucket(), item.getSourceKey());
+        } else if (result.isMissingSource()) {
           logger.warn("RETRY_SOURCE_NOT_FOUND: entityType={} entityId={} — "
-                  + "s3://{}/{} still does not exist — marking as SKIPPED",
+                  + "s3://{}/{} missing on copy — marking as SKIPPED",
               item.getEntityType(), item.getEntityId(),
               item.getSourceBucket(), item.getSourceKey());
           item.setStatus("SKIPPED");
@@ -702,26 +966,13 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
           stateRepo.save(item);
           stillFailed.incrementAndGet();
         } else {
-          CopyResult result = copyWithVerify(
-              item.getSourceBucket(), item.getSourceKey(),
-              item.getDestBucket(), item.getDestKey());
-          if (result.isSuccess()) {
-            item.setStatus("COMPLETED");
-            item.setErrorMessage(null);
-            stateRepo.save(item);
-            recovered.incrementAndGet();
-            logger.info("RETRY_RECOVERED: entityType={} entityId={} — s3://{}/{}",
-                item.getEntityType(), item.getEntityId(),
-                item.getSourceBucket(), item.getSourceKey());
-          } else {
-            item.setAttempts(item.getAttempts() + maxRetries);
-            item.setErrorMessage(result.getErrorMessage());
-            stateRepo.save(item);
-            stillFailed.incrementAndGet();
-            logger.error("RETRY_STILL_FAILED: entityType={} entityId={} — s3://{}/{} — {}",
-                item.getEntityType(), item.getEntityId(),
-                item.getSourceBucket(), item.getSourceKey(), result.getErrorMessage());
-          }
+          item.setAttempts(item.getAttempts() + maxRetries);
+          item.setErrorMessage(result.getErrorMessage());
+          stateRepo.save(item);
+          stillFailed.incrementAndGet();
+          logger.error("RETRY_STILL_FAILED: entityType={} entityId={} — s3://{}/{} — {}",
+              item.getEntityType(), item.getEntityId(),
+              item.getSourceBucket(), item.getSourceKey(), result.getErrorMessage());
         }
         long pos = processed.incrementAndGet();
         if (pos % 100 == 0 || pos == 1) {
@@ -770,6 +1021,52 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     }
   }
 
+  /**
+   * Prefetches {@link MigrationState} rows for all file/thumbnail keys in a parallel wave to avoid
+   * per-row SELECT contention on {@code migration_state}.
+   */
+  private Map<String, MigrationState> buildWaveStateCache(String srcBucket, List<Attachment> wave) {
+    Set<String> keys = new LinkedHashSet<>();
+    for (Attachment att : wave) {
+      collectPrefetchKeysForAttachment(att, keys);
+    }
+    if (keys.isEmpty()) {
+      return new HashMap<>();
+    }
+    return new HashMap<>(stateRepo.findByBucketAndKeys(MIGRATION_TYPE, srcBucket, keys));
+  }
+
+  private void collectPrefetchKeysForAttachment(Attachment att, Set<String> keys) {
+    extractSrcKeyIfNeedsMigration(att.getFileId()).ifPresent(keys::add);
+    extractSrcKeyIfNeedsMigration(att.getThumbnailId()).ifPresent(keys::add);
+  }
+
+  private Optional<String> extractSrcKeyIfNeedsMigration(String encodedFilePath) {
+    if (encodedFilePath == null) {
+      return Optional.empty();
+    }
+    String filePath = decode(encodedFilePath);
+    if (PROJECT_PREFIX.equals(getPathFirstPart(filePath) + "/")) {
+      return Optional.empty();
+    }
+    return Optional.of(cutPath(filePath));
+  }
+
+  private Optional<MigrationState> lookupExistingState(String srcBucket, String srcKey,
+      Map<String, MigrationState> stateCache) {
+    if (stateCache != null) {
+      MigrationState cached = stateCache.get(srcKey);
+      if (cached != null) {
+        return Optional.of(cached);
+      }
+    }
+    Optional<MigrationState> fromDb = stateRepo.findByKey(MIGRATION_TYPE, srcBucket, srcKey);
+    if (stateCache != null && fromDb.isPresent()) {
+      stateCache.put(srcKey, fromDb.get());
+    }
+    return fromDb;
+  }
+
   // ---- helpers ----
 
   private String getPluginPath(Plugin plugin) {
@@ -788,10 +1085,10 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   }
 
   private String getSourceBucketForMigration() {
-    if (bucketExists(defaultBucketName)) {
+    if (bucketExists(defaultBucketName, clients.getSource())) {
       return defaultBucketName;
     }
-    if (bucketExists(bucketPrefix + defaultBucketName)) {
+    if (bucketExists(bucketPrefix + defaultBucketName, clients.getSource())) {
       return bucketPrefix + defaultBucketName;
     }
     return null;
@@ -817,9 +1114,9 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
             StandardCharsets.UTF_8);
   }
 
-  private boolean bucketExists(String bucketName) {
+  private boolean bucketExists(String bucketName, S3AsyncClient client) {
     try {
-      s3Client.headBucket(HeadBucketRequest.builder().bucket(bucketName).build()).join();
+      client.headBucket(HeadBucketRequest.builder().bucket(bucketName).build()).join();
       return true;
     } catch (Exception e) {
       return false;
@@ -828,7 +1125,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
   private void deleteFile(String filePath, String bucketName) {
     try {
-      s3Client.deleteObject(
+      clients.getSource().deleteObject(
           DeleteObjectRequest.builder().bucket(bucketName).key(filePath).build()).join();
     } catch (Exception e) {
       logger.warn("Failed to delete s3://{}/{}: {}", bucketName, filePath, e.getMessage());
@@ -837,7 +1134,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
   private void deleteBucket(String bucketName) {
     try {
-      s3Client.deleteBucket(
+      clients.getSource().deleteBucket(
           DeleteBucketRequest.builder().bucket(bucketName).build()).join();
     } catch (Exception e) {
       logger.warn("Bucket '{}' not deleted: {}", bucketName, e.getMessage());
@@ -856,10 +1153,109 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
     for (List<ObjectIdentifier> partition : Iterables.partition(ids, 1000)) {
       try {
-        s3Client.deleteObjects(DeleteObjectsRequest.builder().bucket(bucketName)
+        clients.getSource().deleteObjects(DeleteObjectsRequest.builder().bucket(bucketName)
             .delete(Delete.builder().objects(partition).build()).build()).join();
       } catch (Exception e) {
         logger.warn("Batch delete failed for '{}': {}", bucketName, e.getMessage());
+      }
+    }
+  }
+
+  /**
+   * Batches {@code UPDATE public.attachment SET file_id / thumbnail_id} after successful S3 copies.
+   * {@link MigrationState} stays IN_PROGRESS until the JDBC batch is applied; then rows are COMPLETED.
+   * Queues flush when they reach the configured batch size and via {@link #flushAll()} before source S3 deletes.
+   */
+  private final class AttachmentRowUpdateBuffer {
+
+    private static final class QueuedAttachmentRow {
+      final long attachmentId;
+      final String encodedDest;
+      final MigrationState state;
+
+      QueuedAttachmentRow(long attachmentId, String encodedDest, MigrationState state) {
+        this.attachmentId = attachmentId;
+        this.encodedDest = encodedDest;
+        this.state = state;
+      }
+    }
+
+    private final List<QueuedAttachmentRow> fileRows = new ArrayList<>();
+    private final List<QueuedAttachmentRow> thumbRows = new ArrayList<>();
+
+    synchronized void enqueueSuccess(String updateSql, long attachmentId, String encodedDest,
+        MigrationState state) {
+      if (UPDATE_ATTACHMENT_FILE_ID.equals(updateSql)) {
+        fileRows.add(new QueuedAttachmentRow(attachmentId, encodedDest, state));
+        if (fileRows.size() >= attachmentUpdateBatchSize) {
+          flushFiles();
+        }
+      } else if (UPDATE_ATTACHMENT_THUMBNAIL_ID.equals(updateSql)) {
+        thumbRows.add(new QueuedAttachmentRow(attachmentId, encodedDest, state));
+        if (thumbRows.size() >= attachmentUpdateBatchSize) {
+          flushThumbs();
+        }
+      } else {
+        throw new IllegalStateException("Unexpected attachment UPDATE SQL: " + updateSql);
+      }
+    }
+
+    synchronized void flushAll() {
+      flushFiles();
+      flushThumbs();
+    }
+
+    private synchronized void flushFiles() {
+      if (fileRows.isEmpty()) {
+        return;
+      }
+      List<QueuedAttachmentRow> batch = new ArrayList<>(fileRows);
+      fileRows.clear();
+      jdbcTemplate.batchUpdate(UPDATE_ATTACHMENT_FILE_ID, new BatchPreparedStatementSetter() {
+        @Override
+        public void setValues(PreparedStatement ps, int i) throws SQLException {
+          QueuedAttachmentRow q = batch.get(i);
+          ps.setString(1, q.encodedDest);
+          ps.setLong(2, q.attachmentId);
+        }
+
+        @Override
+        public int getBatchSize() {
+          return batch.size();
+        }
+      });
+      for (QueuedAttachmentRow q : batch) {
+        q.state.setStatus("COMPLETED");
+        q.state.setErrorMessage(null);
+        q.state.setAttempts(q.state.getAttempts() + 1);
+        stateRepo.save(q.state);
+      }
+    }
+
+    private synchronized void flushThumbs() {
+      if (thumbRows.isEmpty()) {
+        return;
+      }
+      List<QueuedAttachmentRow> batch = new ArrayList<>(thumbRows);
+      thumbRows.clear();
+      jdbcTemplate.batchUpdate(UPDATE_ATTACHMENT_THUMBNAIL_ID, new BatchPreparedStatementSetter() {
+        @Override
+        public void setValues(PreparedStatement ps, int i) throws SQLException {
+          QueuedAttachmentRow q = batch.get(i);
+          ps.setString(1, q.encodedDest);
+          ps.setLong(2, q.attachmentId);
+        }
+
+        @Override
+        public int getBatchSize() {
+          return batch.size();
+        }
+      });
+      for (QueuedAttachmentRow q : batch) {
+        q.state.setStatus("COMPLETED");
+        q.state.setErrorMessage(null);
+        q.state.setAttempts(q.state.getAttempts() + 1);
+        stateRepo.save(q.state);
       }
     }
   }

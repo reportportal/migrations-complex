@@ -1,8 +1,15 @@
 package com.epam.reportportal.repository;
 
 import com.epam.reportportal.model.MigrationState;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -98,6 +105,30 @@ public class MigrationStateRepository {
     List<MigrationState> results =
         jdbcTemplate.query(SELECT_BY_KEY, ROW_MAPPER, migrationType, sourceBucket, sourceKey);
     return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+  }
+
+  /**
+   * Batch-load migration rows for many source keys (same migration type and bucket).
+   * Returns map {@code source_key -> state}; keys with no row are omitted.
+   */
+  public Map<String, MigrationState> findByBucketAndKeys(String migrationType, String sourceBucket,
+      Collection<String> sourceKeys) {
+    if (sourceKeys == null || sourceKeys.isEmpty()) {
+      return Collections.emptyMap();
+    }
+    List<String> distinctKeys = new ArrayList<>(new LinkedHashSet<>(sourceKeys));
+    String inClause = distinctKeys.stream().map(k -> "?").collect(Collectors.joining(","));
+    String sql = "SELECT * FROM public.migration_state WHERE migration_type = ? AND source_bucket = ?"
+        + " AND source_key IN (" + inClause + ")";
+    List<Object> argList = new ArrayList<>();
+    argList.add(migrationType);
+    argList.add(sourceBucket);
+    argList.addAll(distinctKeys);
+    Map<String, MigrationState> out = new HashMap<>();
+    for (MigrationState s : jdbcTemplate.query(sql, ROW_MAPPER, argList.toArray())) {
+      out.put(s.getSourceKey(), s);
+    }
+    return out;
   }
 
   public List<MigrationState> findByStatus(String migrationType, String status) {

@@ -60,8 +60,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-aop'
 
-    implementation 'com.amazonaws:aws-java-sdk-s3:1.12.456'
-    implementation 'software.amazon.awssdk:s3-transfer-manager:2.20.57'
+    implementation platform('software.amazon.awssdk:bom:2.20.57')
+    implementation 'software.amazon.awssdk:s3'
     implementation 'software.amazon.awssdk.crt:aws-crt:0.21.8'
 
     implementation 'com.google.guava:guava:31.1-jre'
