@@ -940,8 +940,12 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     logger.info(">>> PLUGIN MIGRATION STARTED — {} plugins in DB", plugins.size());
 
     for (Plugin plugin : plugins) {
+      if (!integrationPluginNeedsMigration(plugin)) {
+        metrics.incrementSkipped();
+        continue;
+      }
       String pluginPath = getPluginPath(plugin);
-      if (pluginPath == null || isPluginAlreadyMigrated(pluginPath)) {
+      if (pluginPath == null) {
         metrics.incrementSkipped();
         continue;
       }
@@ -965,7 +969,9 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
           singleBucketName, destKey, metrics);
 
       JSONObject detailsJson = new JSONObject(plugin.getDetails());
-      detailsJson.getJSONObject("details").put("id", destKey);
+      JSONObject innerDetails = detailsJson.getJSONObject("details");
+      // Keep logical id (e.g. "test-execution"); storage path belongs in fileId for ReportPortal.
+      innerDetails.put("fileId", destKey);
       jdbcTemplate.update(UPDATE_PLUGIN_DETAILS, detailsJson.toString(), plugin.getId());
 
       if (removeAfterMigration) {
@@ -1173,6 +1179,41 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
   }
 
   /**
+   * False when missing details/id, already migrated ({@code fileId} under {@code plugins/}), or legacy row
+   * where {@code id} was overwritten with a {@code plugins/} path.
+   */
+  private boolean integrationPluginNeedsMigration(Plugin plugin) {
+    if (StringUtils.isEmpty(plugin.getDetails())) {
+      return false;
+    }
+    try {
+      JSONObject root = new JSONObject(plugin.getDetails());
+      if (!root.has("details")) {
+        return false;
+      }
+      JSONObject inner = root.getJSONObject("details");
+      if (!inner.has("id") || StringUtils.isBlank(inner.optString("id"))) {
+        return false;
+      }
+      String logicalId = inner.getString("id").trim();
+      if (logicalId.startsWith(PLUGINS_PREFIX)) {
+        return false;
+      }
+      if (inner.has("fileId")) {
+        String fileId = inner.optString("fileId", "");
+        if (fileId.startsWith(PLUGINS_PREFIX)) {
+          return false;
+        }
+      }
+      return true;
+    } catch (Exception e) {
+      logger.debug("integrationPluginNeedsMigration: parse failed for plugin id={}: {}",
+          plugin.getId(), e.getMessage());
+      return false;
+    }
+  }
+
+  /**
    * Resolves the real MinIO object key for a plugin. The DB often stores a logical id (e.g. {@code jira},
    * {@code quality gate}) while the default bucket stores versioned JARs at the bucket root
    * (e.g. {@code jira-5.13.1.jar}, {@code quality gate-5.13.1.jar}). Tries exact key first, then lists
@@ -1230,10 +1271,6 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     }
     return key.equals(logicalId + ".jar")
         || key.startsWith(logicalId + "-");
-  }
-
-  private boolean isPluginAlreadyMigrated(String pluginPath) {
-    return PLUGINS_PREFIX.equals(getPathFirstPart(pluginPath) + "/");
   }
 
   private String getSourceBucketForMigration() {
