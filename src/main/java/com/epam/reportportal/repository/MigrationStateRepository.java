@@ -31,6 +31,19 @@ public class MigrationStateRepository {
       "SELECT * FROM public.migration_state"
           + " WHERE migration_type = ? AND status = ? ORDER BY id";
 
+  private static final String SELECT_BY_STATUS_AFTER_ID =
+      "SELECT * FROM public.migration_state"
+          + " WHERE migration_type = ? AND status = ? AND id > ?"
+          + " ORDER BY id ASC LIMIT ?";
+
+  private static final String COUNT_BY_MIGRATION_AND_STATUS =
+      "SELECT COUNT(*) FROM public.migration_state"
+          + " WHERE migration_type = ? AND status = ?";
+
+  private static final String SELECT_IDS_BY_STATUS =
+      "SELECT id FROM public.migration_state"
+          + " WHERE migration_type = ? AND status = ? ORDER BY id";
+
   private static final String SELECT_BY_KEY =
       "SELECT * FROM public.migration_state"
           + " WHERE migration_type = ? AND source_bucket = ? AND source_key = ?";
@@ -133,6 +146,39 @@ public class MigrationStateRepository {
 
   public List<MigrationState> findByStatus(String migrationType, String status) {
     return jdbcTemplate.query(SELECT_BY_STATUS, ROW_MAPPER, migrationType, status);
+  }
+
+  /**
+   * Keyset page of rows by {@code id} — avoids loading millions of FAILED/SKIPPED rows at once.
+   */
+  public List<MigrationState> findByStatusAfterId(String migrationType, String status,
+      long idAfter, int limit) {
+    return jdbcTemplate.query(SELECT_BY_STATUS_AFTER_ID, ROW_MAPPER,
+        migrationType, status, idAfter, limit);
+  }
+
+  public long countByMigrationTypeAndStatus(String migrationType, String status) {
+    Long c = jdbcTemplate.queryForObject(COUNT_BY_MIGRATION_AND_STATUS, Long.class,
+        migrationType, status);
+    return c != null ? c : 0L;
+  }
+
+  /** Lightweight snapshot of FAILED/SKIPPED ids for chunked loading (avoids huge ORM lists of full rows). */
+  public List<Long> findIdsByMigrationTypeAndStatus(String migrationType, String status) {
+    return jdbcTemplate.query(SELECT_IDS_BY_STATUS,
+        (rs, rowNum) -> rs.getLong("id"),
+        migrationType, status);
+  }
+
+  public List<MigrationState> findByIds(Collection<Long> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return Collections.emptyList();
+    }
+    List<Long> idList = new ArrayList<>(ids);
+    String inClause = idList.stream().map(k -> "?").collect(Collectors.joining(","));
+    String sql = "SELECT * FROM public.migration_state WHERE id IN (" + inClause + ")";
+    List<Object> args = new ArrayList<>(idList);
+    return jdbcTemplate.query(sql, ROW_MAPPER, args.toArray());
   }
 
   public void logSummary(String migrationType, Logger logger) {

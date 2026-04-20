@@ -194,12 +194,15 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     this.progressLogInterval = progressLogInterval;
     this.attachmentUpdateBatchSize = Math.max(1, attachmentUpdateBatchSize);
     this.attachmentCreationDateColumn = requireSqlIdentifier(attachmentCreationDateColumn, "migration.db.attachment-creation-date-column");
+    // INNER JOIN project: skip orphan attachments (project_id not in public.project).
     this.discoverProjectsSql =
-        "SELECT project_id, COUNT(id) AS cnt FROM public.attachment WHERE "
-            + this.attachmentCreationDateColumn + " < ? GROUP BY project_id ORDER BY cnt DESC";
+        "SELECT a.project_id, COUNT(a.id) AS cnt FROM public.attachment a "
+            + "INNER JOIN public.project p ON p.id = a.project_id WHERE a."
+            + this.attachmentCreationDateColumn + " <= ? GROUP BY a.project_id ORDER BY cnt DESC";
     this.selectAttachmentsKeysetSql =
-        "SELECT id, file_id, thumbnail_id, project_id FROM public.attachment WHERE project_id = ? AND id > ? AND "
-            + this.attachmentCreationDateColumn + " < ? ORDER BY id LIMIT ?";
+        "SELECT a.id, a.file_id, a.thumbnail_id, a.project_id FROM public.attachment a "
+            + "INNER JOIN public.project p ON p.id = a.project_id WHERE a.project_id = ? AND a.id > ? AND a."
+            + this.attachmentCreationDateColumn + " <= ? ORDER BY a.id LIMIT ?";
     this.attachmentCutoffRaw = attachmentCutoffRaw;
     this.verifyDestinationAfterCopy = verifyDestinationAfterCopy;
     this.headSourceBeforeCopy = headSourceBeforeCopy;
@@ -219,6 +222,12 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         StringUtils.isBlank(attachmentCutoffRaw) ? "<unset → Instant.now() at project-data start>"
             : attachmentCutoffRaw,
         verifyDestinationAfterCopy, headSourceBeforeCopy, maxInMemoryCopyMb, destinationRegion);
+    if (batchSize > 50_000) {
+      logger.warn("migration.batch.size={} is very large: each page loads that many Attachment rows into heap; "
+              + "with parallelism={} up to ~{} rows may exist across concurrent projects. "
+              + "Prefer MIGRATION_BATCH_SIZE 10000–25000 unless heap is very large.",
+          batchSize, parallelism, (long) batchSize * parallelism);
+    }
   }
 
   /**
@@ -438,7 +447,10 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
           AsyncRequestBody.fromBytes(bytes.asByteArray())).join();
       return;
     }
+    // createTempFile() leaves an empty file; CRT + FileAsyncResponseTransformer use CREATE_NEW
+    // and throw FileAlreadyExistsException if the path already exists.
     Path tmp = Files.createTempFile("rp-migr-", ".bin");
+    Files.delete(tmp);
     try {
       clients.getSource().getObject(
           GetObjectRequest.builder().bucket(srcBucket).key(srcKey).build(),
@@ -532,7 +544,8 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         new long[]{rs.getLong("project_id"), rs.getLong("cnt")}, attachmentCutoff);
 
     logger.info(">>> PROJECT ATTACHMENTS MIGRATION — DISCOVERY PHASE");
-    logger.info("Attachment selection: {} < {} (cutoff instant={}{})",
+    logger.info("Attachment selection: public.attachment a INNER JOIN public.project p ON p.id = a.project_id — "
+            + "{} <= {} (cutoff instant={}{}); rows with missing project are not migrated",
         attachmentCreationDateColumn, attachmentCutoff, cutoffInstant,
         StringUtils.isBlank(attachmentCutoffRaw) ? ", resolved at project-data start"
             : ", from migration.db.attachment-cutoff");
@@ -561,6 +574,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
     if (migratable.isEmpty()) {
       logger.info("<<< PROJECT ATTACHMENTS MIGRATION FINISHED — nothing to migrate");
+      projectStats.clear();
       return;
     }
 
@@ -591,12 +605,16 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     }
 
     CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    futures.clear();
 
     long totalElapsedSec = (System.currentTimeMillis() - startTimeMs) / 1000;
     double overallRate = globalMetrics.getProcessed() > 0
         ? (double) globalMetrics.getProcessed() / Math.max(totalElapsedSec, 1) : 0;
     logger.info("<<< PROJECT ATTACHMENTS MIGRATION FINISHED — {} projects in {}s — {} — rate={} attachments/s",
         migratable.size(), totalElapsedSec, globalMetrics.summary(), String.format("%.1f", overallRate));
+
+    migratable.clear();
+    projectStats.clear();
   }
 
   /**
@@ -658,6 +676,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
             }, intraProjectExecutor));
           }
           CompletableFuture.allOf(wave.toArray(new CompletableFuture[0])).join();
+          wave.clear();
         }
       }
 
@@ -665,6 +684,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         attachmentRowBuffer.flushAll();
       }
 
+      boolean lastAttachmentPage = batch.size() < batchSize;
       lastId = batch.get(batch.size() - 1).getId();
       logger.info("  Project {} batch {} complete ({} items, lastId={}) — {}",
           projectId, batchNumber, batch.size(), lastId, metrics.summary());
@@ -673,7 +693,8 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
         deleteAttachments(batch, srcBucket);
       }
 
-      if (batch.size() < batchSize) {
+      clearAttachmentBatch(batch);
+      if (lastAttachmentPage) {
         break;
       }
     }
@@ -849,11 +870,20 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       futures.add(future);
     }
     CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    futures.clear();
+    users.clear();
 
     if (removeAfterMigration) {
       deleteBucket(srcBucket);
     }
     logger.info("<<< USER PHOTOS MIGRATION FINISHED — {}", metrics.summary());
+  }
+
+  /** Drop references to attachment rows immediately after a page is processed (helps GC between keyset queries). */
+  private static void clearAttachmentBatch(List<Attachment> batch) {
+    if (batch != null && !batch.isEmpty()) {
+      batch.clear();
+    }
   }
 
   private void migratePhotoSafe(String encodedPath, Long userId, String sql,
@@ -982,6 +1012,7 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
       deleteBucket(defaultBucketName);
       deleteBucket(bucketPrefix + defaultBucketName);
     }
+    plugins.clear();
     logger.info("<<< PLUGIN MIGRATION FINISHED — {}", metrics.summary());
   }
 
@@ -1008,82 +1039,94 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
 
   // ---- retry failed items from previous runs ----
 
+  private static final int RETRY_FAILED_PAGE_SIZE = 2500;
+
   private void retryFailedItems() {
-    List<MigrationState> failed = stateRepo.findByStatus(MIGRATION_TYPE, "FAILED");
-    if (failed.isEmpty()) {
+    List<Long> failedIds = stateRepo.findIdsByMigrationTypeAndStatus(MIGRATION_TYPE, "FAILED");
+    if (failedIds.isEmpty()) {
       logger.info("No failed items to retry");
       return;
     }
-    logger.info("Retrying {} previously failed items, parallelism={}", failed.size(), parallelism);
+    long total = failedIds.size();
+    logger.info("Retrying {} FAILED row(s) in id-chunks of {}, parallelism={}",
+        total, RETRY_FAILED_PAGE_SIZE, parallelism);
     AtomicLong recovered = new AtomicLong(0);
-    AtomicLong stillFailed = new AtomicLong(0);
+    AtomicLong stillFailedOrSkipped = new AtomicLong(0);
     AtomicLong processed = new AtomicLong(0);
-    long total = failed.size();
 
-    List<CompletableFuture<Void>> futures = new ArrayList<>(failed.size());
-    for (MigrationState item : failed) {
-      CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-        Optional<Long> srcLen = Optional.empty();
-        if (headSourceBeforeCopy || maxInMemoryCopyBytes > 0) {
-          srcLen = tryHeadSourceContentLength(item.getSourceBucket(), item.getSourceKey());
-          if (!srcLen.isPresent()) {
+    for (int from = 0; from < failedIds.size(); from += RETRY_FAILED_PAGE_SIZE) {
+      int to = Math.min(from + RETRY_FAILED_PAGE_SIZE, failedIds.size());
+      List<Long> idChunk = failedIds.subList(from, to);
+      List<MigrationState> page = stateRepo.findByIds(idChunk);
+
+      List<CompletableFuture<Void>> futures = new ArrayList<>(page.size());
+      for (MigrationState item : page) {
+        CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+          Optional<Long> srcLen = Optional.empty();
+          if (headSourceBeforeCopy || maxInMemoryCopyBytes > 0) {
+            srcLen = tryHeadSourceContentLength(item.getSourceBucket(), item.getSourceKey());
+            if (!srcLen.isPresent()) {
+              logger.warn("RETRY_SOURCE_NOT_FOUND: entityType={} entityId={} — "
+                      + "s3://{}/{} still does not exist — marking as SKIPPED",
+                  item.getEntityType(), item.getEntityId(),
+                  item.getSourceBucket(), item.getSourceKey());
+              item.setStatus("SKIPPED");
+              item.setErrorMessage("Source object not found on retry");
+              stateRepo.save(item);
+              stillFailedOrSkipped.incrementAndGet();
+              bumpRetryProgress(processed, recovered, stillFailedOrSkipped, total);
+              return;
+            }
+          }
+          CopyResult result = copyMinioToS3WithVerify(
+              item.getSourceBucket(), item.getSourceKey(),
+              item.getDestBucket(), item.getDestKey(), srcLen);
+          if (result.isSuccess()) {
+            item.setStatus("COMPLETED");
+            item.setErrorMessage(null);
+            stateRepo.save(item);
+            recovered.incrementAndGet();
+            logger.info("RETRY_RECOVERED: entityType={} entityId={} — s3://{}/{}",
+                item.getEntityType(), item.getEntityId(),
+                item.getSourceBucket(), item.getSourceKey());
+          } else if (result.isMissingSource()) {
             logger.warn("RETRY_SOURCE_NOT_FOUND: entityType={} entityId={} — "
-                    + "s3://{}/{} still does not exist — marking as SKIPPED",
+                    + "s3://{}/{} missing on copy — marking as SKIPPED",
                 item.getEntityType(), item.getEntityId(),
                 item.getSourceBucket(), item.getSourceKey());
             item.setStatus("SKIPPED");
             item.setErrorMessage("Source object not found on retry");
             stateRepo.save(item);
-            stillFailed.incrementAndGet();
-            long pos = processed.incrementAndGet();
-            if (pos % 100 == 0 || pos == 1) {
-              logger.info("  Retry progress: {}/{} (recovered={}, still_failed={})",
-                  pos, total, recovered.get(), stillFailed.get());
-            }
-            return;
+            stillFailedOrSkipped.incrementAndGet();
+          } else {
+            item.setAttempts(item.getAttempts() + maxRetries);
+            item.setErrorMessage(result.getErrorMessage());
+            stateRepo.save(item);
+            stillFailedOrSkipped.incrementAndGet();
+            logger.error("RETRY_STILL_FAILED: entityType={} entityId={} — s3://{}/{} — {}",
+                item.getEntityType(), item.getEntityId(),
+                item.getSourceBucket(), item.getSourceKey(), result.getErrorMessage());
           }
-        }
-        CopyResult result = copyMinioToS3WithVerify(
-            item.getSourceBucket(), item.getSourceKey(),
-            item.getDestBucket(), item.getDestKey(), srcLen);
-        if (result.isSuccess()) {
-          item.setStatus("COMPLETED");
-          item.setErrorMessage(null);
-          stateRepo.save(item);
-          recovered.incrementAndGet();
-          logger.info("RETRY_RECOVERED: entityType={} entityId={} — s3://{}/{}",
-              item.getEntityType(), item.getEntityId(),
-              item.getSourceBucket(), item.getSourceKey());
-        } else if (result.isMissingSource()) {
-          logger.warn("RETRY_SOURCE_NOT_FOUND: entityType={} entityId={} — "
-                  + "s3://{}/{} missing on copy — marking as SKIPPED",
-              item.getEntityType(), item.getEntityId(),
-              item.getSourceBucket(), item.getSourceKey());
-          item.setStatus("SKIPPED");
-          item.setErrorMessage("Source object not found on retry");
-          stateRepo.save(item);
-          stillFailed.incrementAndGet();
-        } else {
-          item.setAttempts(item.getAttempts() + maxRetries);
-          item.setErrorMessage(result.getErrorMessage());
-          stateRepo.save(item);
-          stillFailed.incrementAndGet();
-          logger.error("RETRY_STILL_FAILED: entityType={} entityId={} — s3://{}/{} — {}",
-              item.getEntityType(), item.getEntityId(),
-              item.getSourceBucket(), item.getSourceKey(), result.getErrorMessage());
-        }
-        long pos = processed.incrementAndGet();
-        if (pos % 100 == 0 || pos == 1) {
-          logger.info("  Retry progress: {}/{} (recovered={}, still_failed={})",
-              pos, total, recovered.get(), stillFailed.get());
-        }
-      }, copyExecutor);
-      futures.add(future);
+          bumpRetryProgress(processed, recovered, stillFailedOrSkipped, total);
+        }, copyExecutor);
+        futures.add(future);
+      }
+      CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+      page.clear();
     }
-    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    failedIds.clear();
 
-    logger.info("Retry complete: {}/{} recovered, {}/{} still failed",
-        recovered.get(), total, stillFailed.get(), total);
+    logger.info("Retry complete: recovered={}, unresolved_or_still_bad≈{} (processed_ops={})",
+        recovered.get(), stillFailedOrSkipped.get(), processed.get());
+  }
+
+  private void bumpRetryProgress(AtomicLong processed, AtomicLong recovered,
+      AtomicLong stillFailedOrSkipped, long approxTotal) {
+    long pos = processed.incrementAndGet();
+    if (pos % 100 == 0 || pos == 1) {
+      logger.info("  Retry progress: {} ops (approx baseline FAILED rows {}) — recovered={}, unresolved={}",
+          pos, approxTotal, recovered.get(), stillFailedOrSkipped.get());
+    }
   }
 
   // ---- final summary ----
@@ -1092,29 +1135,31 @@ public class SingleBucketMigrationServiceImpl implements MigrationService {
     logger.info("=== Single-bucket migration summary ===");
     stateRepo.logSummary(MIGRATION_TYPE, logger);
 
-    List<MigrationState> failures = stateRepo.findByStatus(MIGRATION_TYPE, "FAILED");
-    if (!failures.isEmpty()) {
-      logger.warn("=== {} items still in FAILED state ===", failures.size());
+    long failCount = stateRepo.countByMigrationTypeAndStatus(MIGRATION_TYPE, "FAILED");
+    if (failCount > 0) {
+      logger.warn("=== {} items still in FAILED state (showing up to 50) ===", failCount);
+      List<MigrationState> failures = stateRepo.findByStatusAfterId(MIGRATION_TYPE, "FAILED", 0L, 50);
       for (MigrationState f : failures) {
         logger.warn("  FAILED: entityType={} entityId={} source=s3://{}/{} error={}",
             f.getEntityType(), f.getEntityId(),
             f.getSourceBucket(), f.getSourceKey(), f.getErrorMessage());
       }
+      if (failCount > 50) {
+        logger.warn("  ... and {} more FAILED rows (see migration_state table)", failCount - 50);
+      }
     }
 
-    List<MigrationState> skipped = stateRepo.findByStatus(MIGRATION_TYPE, "SKIPPED");
-    if (!skipped.isEmpty()) {
-      logger.info("=== {} items SKIPPED (source not found in storage) ===", skipped.size());
-      int shown = 0;
+    long skippedCount = stateRepo.countByMigrationTypeAndStatus(MIGRATION_TYPE, "SKIPPED");
+    if (skippedCount > 0) {
+      logger.info("=== {} items SKIPPED (source not found in storage); showing first 50 ===", skippedCount);
+      List<MigrationState> skipped = stateRepo.findByStatusAfterId(MIGRATION_TYPE, "SKIPPED", 0L, 50);
       for (MigrationState s : skipped) {
-        if (shown++ < 50) {
-          logger.info("  SKIPPED: entityType={} entityId={} source=s3://{}/{}",
-              s.getEntityType(), s.getEntityId(), s.getSourceBucket(), s.getSourceKey());
-        }
+        logger.info("  SKIPPED: entityType={} entityId={} source=s3://{}/{}",
+            s.getEntityType(), s.getEntityId(), s.getSourceBucket(), s.getSourceKey());
       }
-      if (skipped.size() > 50) {
+      if (skippedCount > 50) {
         logger.info("  ... and {} more (query migration_state table for full list)",
-            skipped.size() - 50);
+            skippedCount - 50);
       }
     }
   }
