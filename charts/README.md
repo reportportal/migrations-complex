@@ -19,11 +19,12 @@ matching `attachments` rows in the ReportPortal **PostgreSQL** database.
 - Idempotent — verifies each object on the destination before recording it as migrated.
 - Safe to resume / re-run — already-migrated rows are skipped.
 
-> This chart wires up exactly **one** migration scenario (multi-bucket MinIO →
-> single-bucket S3 + DB updates). The underlying container image supports
-> additional modes (token migration, in-place multi → single bucket
-> consolidation, etc.) — see the [repository-level README](../README.md) for
-> Docker Compose usage of those.
+> This is the **only** migration scenario the image supports today: a
+> multi-bucket MinIO source consolidated into a single AWS S3 bucket, with
+> the matching `attachments` rows rewritten in PostgreSQL. The chart and
+> the [`docker-compose.yaml`](../docker-compose.yaml) at the repo root use
+> the same image and the same env-var schema — they just package it for
+> Kubernetes vs. local Docker.
 
 ---
 

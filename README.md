@@ -1,21 +1,14 @@
 # Migrations Complex
 
 A ReportPortal Job that copies binary data from a **multi-bucket MinIO**
-source into a **single-bucket destination** (typically AWS S3) and
-rewrites the matching `attachments` rows in the ReportPortal **PostgreSQL**
-database to point at the new layout.
+source into a **single AWS S3 bucket**, and rewrites the matching
+`attachments` rows in the ReportPortal **PostgreSQL** database so they
+point at the new bucket layout.
 
-It is intended for two situations:
-
-1. **Consolidation**: collapse N per-project MinIO buckets (`prj-1`, `prj-2`, …)
-   plus the shared `rp-bucket` into a single bucket on the same backend.
-2. **Backend migration**: move that single bucket from MinIO to AWS S3
-   (or any S3-compatible storage), without losing references to historical
-   attachments.
-
-The two are the same operation — only the source/destination endpoints
-differ. Source must be an S3-compatible API (MinIO or S3); destination
-must be S3-compatible (S3 or MinIO).
+This is the **only** migration scenario supported today — a one-shot
+consolidation + backend move from `prj-*` / `rp-bucket` MinIO buckets to a
+single S3 bucket. Older modes (token migration, in-place MinIO→MinIO
+consolidation, S3-only retagging, etc.) are no longer wired up.
 
 > **Looking for Kubernetes / Helm?** Use the [Helm chart](charts/README.md).
 > It wires up the same image and the same environment variables, plus
@@ -39,7 +32,6 @@ must be S3-compatible (S3 or MinIO).
   - [Verification flags](#verification-flags)
   - [JVM](#jvm)
 - [.env template](#env-template)
-- [Source / destination combinations](#source--destination-combinations)
 - [Operating model](#operating-model)
 - [Performance tuning](#performance-tuning)
 - [Troubleshooting](#troubleshooting)
@@ -246,24 +238,6 @@ MIGRATION_S3_HEAD_SOURCE_BEFORE_COPY=true
 # --- JVM ----------------------------------------------------------------------
 JAVA_OPTS=-Xmx4g -XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=70
 ```
-
----
-
-## Source / destination combinations
-
-The Job is symmetric in source and destination — both must speak the S3
-API. Pick the endpoints accordingly.
-
-| Scenario | `MIGRATION_STORAGE_SOURCE_ENDPOINT` | `MIGRATION_STORAGE_DESTINATION_ENDPOINT` | Notes |
-|---|---|---|---|
-| **MinIO multi-bucket → AWS S3** *(primary)* | `http(s)://<minio>:9000` | _empty_ (SDK derives) | The headline use case. |
-| **MinIO multi-bucket → MinIO single-bucket** | `http(s)://<old-minio>:9000` | `http(s)://<new-minio>:9000` | Same backend, consolidation only. |
-| **S3 multi-bucket → S3 single-bucket** | _empty_ (or explicit S3 host) | _empty_ | Requires both `*_REGION` set. |
-| **S3 → MinIO** | _empty_ | `http(s)://<minio>:9000` | Reverse migration / repatriation. |
-
-For all of these, `DATASTORE_BUCKETPREFIX` + `DATASTORE_DEFAULTBUCKETNAME`
-describe what to read on the **source**, and `DATASTORE_SINGLEBUCKETNAME`
-+ `DATASTORE_REGION` describe what to write on the **destination**.
 
 ---
 
