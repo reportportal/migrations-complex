@@ -1,358 +1,334 @@
 # Migrations Complex
 
-A ReportPortal service that runs database and storage migrations: API keys migration, multi-bucket to single-bucket consolidation, and MinIO-to-S3 transfer. Use it when upgrading to ReportPortal 23.3+ or changing your binary storage layout.
+A ReportPortal Job that copies binary data from a **multi-bucket MinIO**
+source into a **single-bucket destination** (typically AWS S3) and
+rewrites the matching `attachments` rows in the ReportPortal **PostgreSQL**
+database to point at the new layout.
+
+It is intended for two situations:
+
+1. **Consolidation**: collapse N per-project MinIO buckets (`prj-1`, `prj-2`, …)
+   plus the shared `rp-bucket` into a single bucket on the same backend.
+2. **Backend migration**: move that single bucket from MinIO to AWS S3
+   (or any S3-compatible storage), without losing references to historical
+   attachments.
+
+The two are the same operation — only the source/destination endpoints
+differ. Source must be an S3-compatible API (MinIO or S3); destination
+must be S3-compatible (S3 or MinIO).
+
+> **Looking for Kubernetes / Helm?** Use the [Helm chart](charts/README.md).
+> It wires up the same image and the same environment variables, plus
+> IRSA, Secrets, and a parameterized `Job`. Detailed performance guidance
+> lives in [`charts/README.md` → Performance tuning](charts/README.md#performance-tuning).
 
 ---
 
 ## Table of contents
 
-- [Overview](#overview)
+- [What it does](#what-it-does)
 - [Prerequisites](#prerequisites)
-- [Migration types at a glance](#migration-types-at-a-glance)
-- [Installation](#installation)
-- [Migration 1: Access tokens → API keys](#migration-1-access-tokens--api-keys)
-- [Migration 2: Multi-bucket → single bucket](#migration-2-multi-bucket--single-bucket)
-- [Migration 3: MinIO single-bucket → S3 single-bucket](#migration-3-minio-single-bucket--s3-single-bucket)
-- [End-to-end: MinIO to S3](#end-to-end-minio-to-s3)
-- [After migration: switching ReportPortal to S3](#after-migration-switching-reportportal-to-s3)
-- [Running Migrations with Docker Compose](#running-migrations-with-docker-compose)
+- [Quick start (Docker Compose)](#quick-start-docker-compose)
+- [Configuration](#configuration)
+  - [Database](#database)
+  - [Bucket layout](#bucket-layout)
+  - [Source — MinIO (multi-bucket)](#source--minio-multi-bucket)
+  - [Destination — S3 (single bucket)](#destination--s3-single-bucket)
+  - [Migration tuning](#migration-tuning)
+  - [DB attachment-update tuning](#db-attachment-update-tuning)
+  - [Verification flags](#verification-flags)
+  - [JVM](#jvm)
+- [.env template](#env-template)
+- [Source / destination combinations](#source--destination-combinations)
+- [Operating model](#operating-model)
+- [Performance tuning](#performance-tuning)
+- [Troubleshooting](#troubleshooting)
 - [License](#license)
 
 ---
 
-## Overview
+## What it does
 
-**Migrations Complex** runs one or more migrations in a single execution. You enable the migrations you need via environment variables and deploy the service next to (or instead of) ReportPortal.
+```text
+   PostgreSQL (attachments)         ┌────────────────────────────┐
+              ▲                     │   migrations-complex Job   │
+              │ updates rows        │  ┌──────────────────────┐  │
+              └───────────────────► │  │  copy + verify loop  │  │
+                                    │  └──────────────────────┘  │
+   MinIO  prj-1, prj-2, …, rp-bucket  ──►  S3   <bucket>
+   (source, multi-bucket)                  (destination, single bucket)
+```
 
-| What you get | Use case |
-|--------------|----------|
-| **API keys migration** | Upgrade from pre-23.3 to 23.3+ (OAuth tokens → API keys). |
-| **Multi-bucket → single bucket** | Merge project buckets (e.g. `prj-1`, `prj-2`, `rp-bucket`) into one bucket (MinIO or S3). |
-| **MinIO → S3** | Copy data from one MinIO bucket to one S3 bucket. |
-
-You can run migrations separately or together. For a full move from MinIO to S3, run multi-bucket → single bucket first, then MinIO → S3.
+- ReportPortal **does not need to be stopped**. You can switch ReportPortal
+  to S3 first; the Job copies historical data in the background.
+- **Idempotent** — verifies each object on the destination before recording
+  it as migrated.
+- Safe to **resume / re-run** — already-migrated rows are skipped.
+- Optionally **deletes the source MinIO buckets** on success
+  (`DATASTORE_REMOVE_AFTER_MIGRATION=true`).
 
 ---
 
 ## Prerequisites
 
-- ReportPortal deployment (or its database and storage available).
-- **Database**: PostgreSQL host, user, password, and database name.
-- **Storage** (for storage migrations): MinIO and/or S3 credentials and bucket names.
-- **Backup**: Take a database backup before any migration.
-
-For **Kubernetes/Helm** deployments, use the [Helm chart](charts/README.md) instead; it uses the same environment variables under the hood (see [charts/values.yaml](charts/values.yaml) for the mapping).
-
----
-
-## Migration types at a glance
-
-| Migration | Downtime | Main env flag |
-|-----------|----------|----------------|
-| Access tokens → API keys | Yes (stop ReportPortal) | `RP_TOKEN_MIGRATION=true` |
-| Multi-bucket → single bucket | Yes (stop ReportPortal) | `RP_SINGLEBUCKET_MIGRATION=true` |
-| MinIO → S3 (single bucket) | No | `RP_MINIO_S3_MIGRATION=true` |
+- Docker 20.10+ and Docker Compose v2 (or any other container runtime).
+- A reachable **multi-bucket MinIO** deployment (the source).
+- An **existing S3 bucket** in the destination region — the Job does
+  **not** create it.
+- A **PostgreSQL** database backup before the run (irreversible row
+  rewrites).
+- Credentials for both ends (or IRSA on EKS for the destination — see the
+  [Helm chart](charts/README.md#7-serviceaccount-irsa-on-eks)).
 
 ---
 
-## Installation
+## Quick start (Docker Compose)
 
-Add the service to your Docker Compose stack and configure it with environment variables. The variable names below match what the application (and the [Helm chart](charts/values.yaml)) expect. Replace placeholders with your real values.
+1. Copy [`.env` template](#env-template) below into a file named `.env`
+   next to [`docker-compose.yaml`](docker-compose.yaml) and fill it in.
+2. Make sure the destination S3 bucket exists.
+3. Take a database backup.
+4. Start the Job:
 
-**Minimal example** (database only, e.g. for API keys migration):
+   ```bash
+   docker compose up migrations-complex
+   docker compose logs -f migrations-complex
+   ```
 
-```yaml
-services:
-  migrations-complex:
-    image: reportportal/migrations-complex:latest
-    environment:
-      RP_DB_HOST: postgres
-      RP_DB_USER: rpuser
-      RP_DB_PASS: your-db-password
-      RP_DB_NAME: reportportal
-      # Enable the migrations you need (see sections below):
-      # RP_TOKEN_MIGRATION: "true"
-      # RP_SINGLEBUCKET_MIGRATION: "true"
-      # RP_MINIO_S3_MIGRATION: "true"
-```
-
-Default bucket names used in examples (same as [charts/values.yaml](charts/values.yaml)): project prefix `prj-`, plugins bucket `rp-bucket`, single bucket `rp-storage`, S3 destination `rp-s3-storage`.
-
-Then start the stack:
-
-```bash
-docker compose up -d migrations-complex
-```
-
-Check logs to confirm the migration finished:
-
-```bash
-docker compose logs -f migrations-complex
-```
+The container exits when the migration finishes (`restart: "no"`).
 
 ---
 
-## Migration 1: Access tokens → API keys
+## Configuration
 
-**When to use:** Upgrading from ReportPortal older than 23.3 to 23.3 or newer. The new version uses API keys instead of OAuth access tokens; this migration converts existing tokens in the database.
+All variables are consumed by the application directly. They are the same
+ones the [Helm chart Job](charts/templates/job.yaml) sets, so any value
+documented for the chart maps 1:1 to the same env var here.
 
-> **Warning:** This migration is **irreversible**. It drops the `oauth_access_token` table and removes all access tokens. Users will need to generate new API keys. Back up the database first.
+### Database
 
-**Steps:**
+ReportPortal's PostgreSQL — the `attachments` table is rewritten in place.
 
-1. **Stop ReportPortal** (or at least ensure no one is using existing tokens during the migration).
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `RP_DB_HOST` | yes | — | PostgreSQL host. |
+| `RP_DB_USER` | yes | — | PostgreSQL user. |
+| `RP_DB_PASS` | yes | — | PostgreSQL password. |
+| `RP_DB_NAME` | no | `reportportal` | Database name. |
+| `RP_DATASOURCE_MAXIMUMPOOLSIZE` | no | `20` | Keep ≥ `MIGRATION_PARALLELISM`. |
 
-2. Add **migrations-complex** to your stack and set:
+### Bucket layout
 
-```yaml
-environment:
-  RP_TOKEN_MIGRATION: "true"
-  RP_DB_HOST: postgres
-  RP_DB_USER: rpuser
-  RP_DB_PASS: your-db-password
-  RP_DB_NAME: reportportal
-```
+Describes the source bucket layout and names the destination bucket.
 
-3. Start the migration service:
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `DATASTORE_BUCKETPREFIX` | no | `prj-` | Prefix that matches per-project source buckets. |
+| `DATASTORE_DEFAULTBUCKETNAME` | no | `rp-bucket` | Source bucket holding plugins / shared data. |
+| `DATASTORE_SINGLEBUCKETNAME` | yes | — | Destination single bucket name (must already exist). |
+| `DATASTORE_REGION` | yes | — | AWS region of the destination bucket. |
+| `DATASTORE_REMOVE_AFTER_MIGRATION` | no | `false` | Delete source MinIO buckets after success. |
 
-```bash
-docker compose up -d migrations-complex
-docker compose logs -f migrations-complex
-```
+### Source — MinIO (multi-bucket)
 
-4. When the job completes, restart ReportPortal. Users can create new API keys from the UI.
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `MIGRATION_STORAGE_SOURCE_ENDPOINT` | yes | — | Full URL incl. scheme + port, e.g. `http://minio:9000`. |
+| `MIGRATION_STORAGE_SOURCE_ACCESSKEY` | yes | — | MinIO access key. |
+| `MIGRATION_STORAGE_SOURCE_SECRETKEY` | yes | — | MinIO secret key. |
+| `MIGRATION_STORAGE_SOURCE_REGION` | no | `us-east-1` | Region the source SDK reports (MinIO default). |
 
-**Example (fragment):**
+### Destination — S3 (single bucket)
 
-```yaml
-migrations-complex:
-  image: reportportal/migrations-complex:latest
-  environment:
-    RP_TOKEN_MIGRATION: "true"
-    RP_DB_HOST: postgres
-    RP_DB_USER: rpuser
-    RP_DB_PASS: "${POSTGRES_PASSWORD}"
-    RP_DB_NAME: reportportal
-```
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `MIGRATION_STORAGE_DESTINATION_ACCESSKEY` | yes\* | — | AWS access key. |
+| `MIGRATION_STORAGE_DESTINATION_SECRETKEY` | yes\* | — | AWS secret key. |
+| `MIGRATION_STORAGE_DESTINATION_REGION` | yes | — | Destination AWS region. |
+| `MIGRATION_STORAGE_DESTINATION_ENDPOINT` | no | derived | Full URL. Empty → SDK derives `https://s3.<region>.amazonaws.com`. |
 
----
+\* On EKS use IRSA via the [Helm chart](charts/README.md#7-serviceaccount-irsa-on-eks)
+and leave both keys empty.
 
-## Migration 2: Multi-bucket → single bucket
+### Migration tuning
 
-**When to use:** You have multiple buckets (e.g. `prj-1`, `prj-2`, `rp-bucket`) and want one consolidated bucket. This is often the first step before [MinIO → S3](#migration-3-minio-single-bucket--s3-single-bucket).
+Controls concurrency, batching and per-object buffering. See
+[Performance tuning](#performance-tuning).
 
-> **Warning:** ReportPortal must be **stopped** during this migration; the attachments table is blocked. Plan for downtime.
+| Variable | Default | Effect |
+|---|---|---|
+| `MIGRATION_PARALLELISM` | `8` | Concurrent project-level workers. |
+| `MIGRATION_INTRA_PROJECT_PARALLELISM` | `16` | Object-level workers within one project. |
+| `MIGRATION_BATCH_SIZE` | `500000` | Objects fetched per LIST call. |
+| `MIGRATION_STORAGE_MAX_IN_MEMORY_COPY_MB` | `128` | Per-object in-memory buffer cap; larger objects are streamed. |
+| `MIGRATION_PROGRESS_LOG_INTERVAL` | `5000` | ms between progress log lines. |
 
-**Steps:**
+### DB attachment-update tuning
 
-1. **Stop ReportPortal.**
+| Variable | Default | Effect |
+|---|---|---|
+| `MIGRATION_DB_ATTACHMENT_UPDATE_BATCH_SIZE` | `1000` | Rows per `UPDATE` batch. |
+| `MIGRATION_DB_ATTACHMENT_CREATION_DATE_COLUMN` | `creation_date` | Column used for the cutoff filter. |
+| `MIGRATION_DB_ATTACHMENT_CUTOFF` | _empty_ | Migrate only rows created strictly before this `YYYY-MM-DD HH:MM:SS.mmm` timestamp. |
 
-2. Add **migrations-complex** with database and storage variables.
+### Verification flags
 
-3. Choose **MinIO** or **S3** as the destination and set the variables for that backend.
+Each enabled flag adds **one HEAD request per object**. See the
+[verification trade-off table](charts/README.md#verification-trade-off)
+for a quick decision matrix.
 
-**Option A — Destination: MinIO** (matches `migrations.storage.multiBucketToSingleBucket.destinationType: minio` and `storage.minio` in the chart):
+| Variable | Default | Effect |
+|---|---|---|
+| `MIGRATION_S3_VERIFY_DESTINATION_AFTER_COPY` | `true` | HEAD destination after copy before rewriting the DB row. |
+| `MIGRATION_S3_HEAD_SOURCE_BEFORE_COPY` | `true` | HEAD source before copy — skip silently-missing keys. |
 
-```yaml
-environment:
-  RP_SINGLEBUCKET_MIGRATION: "true"
-  RP_DB_HOST: postgres
-  RP_DB_USER: rpuser
-  RP_DB_PASS: your-db-password
-  RP_DB_NAME: reportportal
-  DATASTORE_TYPE: minio
-  DATASTORE_ACCESSKEY: minioadmin
-  DATASTORE_SECRETKEY: minioadmin
-  DATASTORE_ENDPOINT: http://minio:9000
-  DATASTORE_BUCKETPREFIX: prj-
-  DATASTORE_DEFAULTBUCKETNAME: rp-bucket
-  DATASTORE_SINGLEBUCKETNAME: rp-storage
-  # Optional: remove source buckets after migration (chart: removeSourceBuckets)
-  # DATASTORE_REMOVE_AFTER_MIGRATION: "true"
-```
+### JVM
 
-**Option B — Destination: S3** (matches `destinationType: s3` and `storage.s3` in the chart):
+| Variable | Default | Effect |
+|---|---|---|
+| `JAVA_OPTS` | `-Xmx4g -XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=70` | Heap, GC, and any other JVM options. |
 
-```yaml
-environment:
-  RP_SINGLEBUCKET_MIGRATION: "true"
-  RP_DB_HOST: postgres
-  RP_DB_USER: rpuser
-  RP_DB_PASS: your-db-password
-  RP_DB_NAME: reportportal
-  DATASTORE_TYPE: s3
-  DATASTORE_ACCESSKEY: your-aws-access-key
-  DATASTORE_SECRETKEY: your-aws-secret-key
-  DATASTORE_REGION: eu-central-1
-  DATASTORE_BUCKETPREFIX: prj-
-  DATASTORE_DEFAULTBUCKETNAME: rp-bucket
-  DATASTORE_SINGLEBUCKETNAME: rp-storage
-```
-
-4. Deploy and monitor:
-
-```bash
-docker compose up -d migrations-complex
-docker compose logs -f migrations-complex
-```
-
-5. After completion, reconfigure ReportPortal to use the new single bucket, then start ReportPortal again.
+`-Xmx` must comfortably fit
+`MIGRATION_STORAGE_MAX_IN_MEMORY_COPY_MB × concurrency overhead`. See the
+[Tuning triangle](charts/README.md#tuning-triangle).
 
 ---
 
-## Migration 3: MinIO single-bucket → S3 single-bucket
+## .env template
 
-**When to use:** You already have one MinIO bucket (e.g. after [Migration 2](#migration-2-multi-bucket--single-bucket)) and want to copy its contents to an S3 bucket. ReportPortal can keep running; you can switch it to S3 and let the migration run in the background.
-
-**Steps:**
-
-1. **Create the target S3 bucket** in AWS (or your S3-compatible storage).
-
-2. Add **migrations-complex** with MinIO (source) and S3 (destination) settings. Bucket names match chart defaults (`migrations.storage.minioToS3.buckets`):
-
-```yaml
-environment:
-  RP_MINIO_S3_MIGRATION: "true"
-  MINIO_ENDPOINT: http://minio:9000
-  MINIO_ACCESS_KEY: minioadmin
-  MINIO_SECRET_KEY: minioadmin
-  S3_ENDPOINT: https://s3.eu-central-1.amazonaws.com
-  S3_ACCESS_KEY: your-aws-access-key
-  S3_SECRET_KEY: your-aws-secret-key
-  MINIO_SINGLE_BUCKET: rp-storage
-  S3_SINGLE_BUCKET: rp-s3-storage
-```
-
-3. Deploy and monitor:
-
-```bash
-docker compose up -d migrations-complex
-docker compose logs -f migrations-complex
-```
-
-4. When the copy is done, [switch ReportPortal to S3](#after-migration-switching-reportportal-to-s3) and remove or reconfigure the migration service.
-
----
-
-## End-to-end: MinIO to S3
-
-To move from an existing MinIO multi-bucket setup to a single S3 bucket:
-
-1. **Create the S3 bucket** you will use as the final destination.
-
-2. **Run [Migration 2](#migration-2-multi-bucket--single-bucket)** (multi-bucket → single bucket) with **MinIO** as the destination.  
-   - Stop ReportPortal, run the migration, then reconfigure ReportPortal to use the new single MinIO bucket and start it again.
-
-3. **Run [Migration 3](#migration-3-minio-single-bucket--s3-single-bucket)** (MinIO → S3).  
-   - You can switch ReportPortal to S3 and start it; the migration can run in parallel.
-
-4. **After Migration 3 completes**, ensure all services use the S3 bucket and single-bucket settings, then remove or disable migrations-complex.
-
-> **Note:** Incorrect order or configuration can break integrations. Test in a non-production environment first and keep a database backup.
-
----
-
-## After migration: switching ReportPortal to S3
-
-When storage has been migrated to S3, point ReportPortal services (e.g. **api**, **authorization**, **jobs**) to S3 and enable the single-bucket flag. Use the same S3 bucket name you set as `S3_SINGLE_BUCKET` (e.g. `rp-s3-storage`):
-
-```yaml
-# Example for api, authorization, jobs
-environment:
-  DATASTORE_TYPE: s3
-  DATASTORE_REGION: eu-central-1
-  DATASTORE_ACCESSKEY: your-aws-access-key
-  DATASTORE_SECRETKEY: your-aws-secret-key
-  DATASTORE_DEFAULTBUCKETNAME: rp-s3-storage
-  RP_FEATURE_FLAGS: singleBucket
-```
-
-Then redeploy those services with the new configuration.
-
----
-
-# Running Migrations with Docker Compose
-
-Below is the recommended Docker Compose setup aligned with Helm chart parameters.
-
-## 1. docker-compose.yaml
-
-```yaml
-version: "3.9"
-
-services:
-  migrations-complex:
-    image: reportportal/migrations-complex:1.0.0
-    environment:
-      RP_TOKEN_MIGRATION: ${RP_TOKEN_MIGRATION}
-      RP_SINGLEBUCKET_MIGRATION: ${RP_SINGLEBUCKET_MIGRATION}
-      RP_MINIO_S3_MIGRATION: ${RP_MINIO_S3_MIGRATION}
-      RP_DB_HOST: ${RP_DB_HOST}
-      RP_DB_USER: ${RP_DB_USER}
-      RP_DB_PASS: ${RP_DB_PASS}
-      RP_DB_NAME: ${RP_DB_NAME}
-      DATASTORE_TYPE: ${DATASTORE_TYPE}
-      DATASTORE_REMOVE_AFTER_MIGRATION: ${DATASTORE_REMOVE_AFTER_MIGRATION}
-      DATASTORE_BUCKETPREFIX: ${DATASTORE_BUCKETPREFIX}
-      DATASTORE_DEFAULTBUCKETNAME: ${DATASTORE_DEFAULTBUCKETNAME}
-      DATASTORE_SINGLEBUCKETNAME: ${DATASTORE_SINGLEBUCKETNAME}
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
-      MINIO_SINGLE_BUCKET: ${MINIO_SINGLE_BUCKET}
-      MINIO_USE_SSL: ${MINIO_USE_SSL}
-      DATASTORE_REGION: ${DATASTORE_REGION}
-      S3_ENDPOINT: ${S3_ENDPOINT}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_SINGLE_BUCKET: ${S3_SINGLE_BUCKET}
-      S3_USE_SSL: ${S3_USE_SSL}
-    restart: "no"
-```
-
----
-
-## 2. `.env` Template
+Copy this file to `.env`, fill in the empty values, and Docker Compose will
+pick it up automatically.
 
 ```env
-RP_TOKEN_MIGRATION=false
-RP_SINGLEBUCKET_MIGRATION=false
-RP_MINIO_S3_MIGRATION=false
+# --- Database -----------------------------------------------------------------
 RP_DB_HOST=postgres
 RP_DB_USER=rpuser
 RP_DB_PASS=
 RP_DB_NAME=reportportal
-DATASTORE_TYPE=minio
-DATASTORE_REMOVE_AFTER_MIGRATION=false
+RP_DATASOURCE_MAXIMUMPOOLSIZE=20
+
+# --- Bucket layout ------------------------------------------------------------
 DATASTORE_BUCKETPREFIX=prj-
 DATASTORE_DEFAULTBUCKETNAME=rp-bucket
-DATASTORE_SINGLEBUCKETNAME=rp-storage
-MINIO_ENDPOINT=http://minio:9000
-MINIO_ACCESS_KEY=
-MINIO_SECRET_KEY=
-MINIO_USE_SSL=false
-MINIO_SINGLE_BUCKET=rp-storage
+DATASTORE_SINGLEBUCKETNAME=rp-s3-storage
 DATASTORE_REGION=eu-central-1
-S3_ENDPOINT=https://s3.eu-central-1.amazonaws.com
-S3_ACCESS_KEY=
-S3_SECRET_KEY=
-S3_SINGLE_BUCKET=rp-s3-storage
-S3_USE_SSL=true
+DATASTORE_REMOVE_AFTER_MIGRATION=false
+
+# --- Source: MinIO ------------------------------------------------------------
+MIGRATION_STORAGE_SOURCE_ENDPOINT=http://minio:9000
+MIGRATION_STORAGE_SOURCE_ACCESSKEY=
+MIGRATION_STORAGE_SOURCE_SECRETKEY=
+MIGRATION_STORAGE_SOURCE_REGION=us-east-1
+
+# --- Destination: S3 ----------------------------------------------------------
+# Leave ENDPOINT empty for native AWS S3 (SDK derives it from REGION).
+MIGRATION_STORAGE_DESTINATION_ENDPOINT=
+MIGRATION_STORAGE_DESTINATION_ACCESSKEY=
+MIGRATION_STORAGE_DESTINATION_SECRETKEY=
+MIGRATION_STORAGE_DESTINATION_REGION=eu-central-1
+
+# --- Migration tuning ---------------------------------------------------------
+MIGRATION_PARALLELISM=8
+MIGRATION_INTRA_PROJECT_PARALLELISM=16
+MIGRATION_BATCH_SIZE=500000
+MIGRATION_STORAGE_MAX_IN_MEMORY_COPY_MB=128
+MIGRATION_PROGRESS_LOG_INTERVAL=5000
+
+# --- DB attachment-update tuning ----------------------------------------------
+MIGRATION_DB_ATTACHMENT_UPDATE_BATCH_SIZE=1000
+MIGRATION_DB_ATTACHMENT_CREATION_DATE_COLUMN=creation_date
+MIGRATION_DB_ATTACHMENT_CUTOFF=
+
+# --- Verification flags -------------------------------------------------------
+MIGRATION_S3_VERIFY_DESTINATION_AFTER_COPY=true
+MIGRATION_S3_HEAD_SOURCE_BEFORE_COPY=true
+
+# --- JVM ----------------------------------------------------------------------
+JAVA_OPTS=-Xmx4g -XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=70
 ```
 
 ---
 
-## 3. Running
+## Source / destination combinations
+
+The Job is symmetric in source and destination — both must speak the S3
+API. Pick the endpoints accordingly.
+
+| Scenario | `MIGRATION_STORAGE_SOURCE_ENDPOINT` | `MIGRATION_STORAGE_DESTINATION_ENDPOINT` | Notes |
+|---|---|---|---|
+| **MinIO multi-bucket → AWS S3** *(primary)* | `http(s)://<minio>:9000` | _empty_ (SDK derives) | The headline use case. |
+| **MinIO multi-bucket → MinIO single-bucket** | `http(s)://<old-minio>:9000` | `http(s)://<new-minio>:9000` | Same backend, consolidation only. |
+| **S3 multi-bucket → S3 single-bucket** | _empty_ (or explicit S3 host) | _empty_ | Requires both `*_REGION` set. |
+| **S3 → MinIO** | _empty_ | `http(s)://<minio>:9000` | Reverse migration / repatriation. |
+
+For all of these, `DATASTORE_BUCKETPREFIX` + `DATASTORE_DEFAULTBUCKETNAME`
+describe what to read on the **source**, and `DATASTORE_SINGLEBUCKETNAME`
++ `DATASTORE_REGION` describe what to write on the **destination**.
+
+---
+
+## Operating model
+
+| Phase | Action |
+|---|---|
+| **Before** | Take a Postgres backup. Confirm the destination bucket exists. Confirm credentials / IAM. |
+| **Cutover (no downtime)** | Reconfigure ReportPortal to write to the destination S3 bucket — new objects start landing there immediately. |
+| **Migration** | `docker compose up migrations-complex` — historical data is copied in the background. |
+| **Verify** | Tail the logs; confirm `MIGRATION_S3_VERIFY_DESTINATION_AFTER_COPY` did not flag failures. |
+| **Cleanup** | `docker compose down`. Optionally re-run with `DATASTORE_REMOVE_AFTER_MIGRATION=true` to drop the old MinIO buckets. |
+
+---
+
+## Performance tuning
+
+The Docker Compose run uses the same knobs as the chart, so the
+**authoritative tuning guide lives in the chart README**:
+
+- [Sizing presets](charts/README.md#sizing-presets) — concrete xs / small /
+  medium / large / xl values for `parallelism`, heap, and pod resources.
+- [What each knob does](charts/README.md#what-each-knob-does) — and what
+  "too low" / "too high" looks like.
+- [Bottleneck checklist](charts/README.md#bottleneck-checklist) —
+  source / network / S3 / DB / JVM / CPU.
+- [Network & cost considerations](charts/README.md#network--cost-considerations) —
+  same-region runs, S3 Gateway endpoint, horizontal scale-out.
+- [Tuning triangle](charts/README.md#tuning-triangle) — the rule that
+  binds `MIGRATION_*`, `JAVA_OPTS -Xmx`, and the container memory limit.
+
+Quick rules of thumb when running with Compose:
+
+1. Bump `MIGRATION_PARALLELISM` and/or `MIGRATION_STORAGE_MAX_IN_MEMORY_COPY_MB`.
+2. Raise `JAVA_OPTS -Xmx` to fit the new working set.
+3. Make sure the host running the container has **≥ 1.25 × `-Xmx`** RAM
+   free (Docker doesn't enforce a `mem_limit` here unless you add one).
+4. Keep `RP_DATASOURCE_MAXIMUMPOOLSIZE` ≥ `MIGRATION_PARALLELISM`.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---|---|
+| Container exits immediately, log says "missing required env" | A required variable from the [Configuration](#configuration) section is unset. |
+| `Connection refused` to Postgres | Wrong `RP_DB_HOST` / `RP_DB_PORT`, or DB not yet ready (start with `depends_on`). |
+| `AccessDenied` on S3 | Wrong AWS keys or IAM policy lacks `s3:GetObject` / `s3:PutObject` on `DATASTORE_SINGLEBUCKETNAME`. |
+| `NoSuchBucket` on S3 | Destination bucket doesn't exist in `DATASTORE_REGION`. Create it first. |
+| MinIO 403 / 404 | Wrong scheme/port in `MIGRATION_STORAGE_SOURCE_ENDPOINT` (HTTP vs HTTPS is the most common). |
+| OOM (host kills the process) | `JAVA_OPTS -Xmx` too high for the host, **or** `MIGRATION_STORAGE_MAX_IN_MEMORY_COPY_MB × parallelism` doesn't fit in the heap. See [Tuning triangle](charts/README.md#tuning-triangle). |
+| Job is slow | Walk through the [Bottleneck checklist](charts/README.md#bottleneck-checklist). |
+| `503 SlowDown` from S3 | Lower `MIGRATION_PARALLELISM × MIGRATION_INTRA_PROJECT_PARALLELISM` for ~30 minutes; AWS auto-partitions the prefix. |
+
+Useful commands:
 
 ```bash
-docker compose up migrations-complex
 docker compose logs -f migrations-complex
+docker compose top  migrations-complex
+docker stats        # live CPU / memory / network for the running container
 ```
-
-The container stops automatically when the migration finishes.
 
 ---
 
 ## License
 
-Licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). See the [LICENSE](LICENSE) file in the repository.
+Licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+See the [LICENSE](LICENSE) file in the repository.

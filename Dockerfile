@@ -9,7 +9,7 @@ RUN chmod +x gradlew \
     && ./gradlew bootJar -Dorg.gradle.project.version=${APP_VERSION} \
     && cp build/libs/*-exec.jar /usr/app/application.jar
 
-FROM amazoncorretto:11.0.30
+FROM amazoncorretto:11.0.31-alpine3.23
 ARG APP_VERSION
 ARG TARGETARCH
 LABEL version=${APP_VERSION} description="EPAM ReportPortal. Complex migrations service" maintainer="Ivan Kustau <ivan_kustau@epam.com>, Hleb Kanonik <hleb_kanonik@epam.com>"

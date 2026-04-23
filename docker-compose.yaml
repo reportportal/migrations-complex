@@ -1,30 +1,83 @@
-version: "3.9"
+## ReportPortal migrations-complex
+##
+## Copies binary data from a multi-bucket MinIO source to a single-bucket
+## destination (typically AWS S3), and updates the matching `attachments`
+## rows in the ReportPortal PostgreSQL database.
+##
+## All knobs come from environment variables — same schema as the Helm chart
+## (charts/templates/job.yaml). Override any of them via a `.env` file or
+## shell exports. Required variables have no default; optional ones use
+## sensible defaults via the `${VAR:-default}` syntax.
 
 services:
   migrations-complex:
-    image: reportportal/migrations-complex:latest
+    image: reportportal/migrations-complex:1.0.0
+    restart: "no"
     environment:
+      ## --- Feature flag (always on for this Job) ---------------------------
       RP_STORAGE_MIGRATION: "true"
 
+      ## --- Source: ReportPortal PostgreSQL ---------------------------------
+      ## Holds the `attachments` rows that get rewritten to point at the new bucket.
       RP_DB_HOST: ${RP_DB_HOST}
       RP_DB_USER: ${RP_DB_USER}
       RP_DB_PASS: ${RP_DB_PASS}
-      RP_DB_NAME: ${RP_DB_NAME}
+      RP_DB_NAME: ${RP_DB_NAME:-reportportal}
+      ## JDBC pool size — keep ≥ MIGRATION_PARALLELISM (one connection per worker).
+      RP_DATASOURCE_MAXIMUMPOOLSIZE: ${RP_DATASOURCE_MAXIMUMPOOLSIZE:-20}
 
-      DATASTORE_BUCKETPREFIX: ${DATASTORE_BUCKETPREFIX:-prj-}
+      ## --- Bucket layout (source MinIO + destination single bucket) --------
+      ## Source side: prefix that matches per-project buckets, plus a fixed
+      ## "plugins / shared" bucket. All of those are copied.
+      DATASTORE_BUCKETPREFIX:      ${DATASTORE_BUCKETPREFIX:-prj-}
       DATASTORE_DEFAULTBUCKETNAME: ${DATASTORE_DEFAULTBUCKETNAME:-rp-bucket}
-      DATASTORE_SINGLEBUCKETNAME: ${DATASTORE_SINGLEBUCKETNAME}
-      DATASTORE_REGION: ${DATASTORE_REGION}
+      ## Destination single bucket (must already exist) and its AWS region.
+      DATASTORE_SINGLEBUCKETNAME:  ${DATASTORE_SINGLEBUCKETNAME}
+      DATASTORE_REGION:            ${DATASTORE_REGION}
+      ## Delete the source MinIO buckets after a successful migration.
       DATASTORE_REMOVE_AFTER_MIGRATION: ${DATASTORE_REMOVE_AFTER_MIGRATION:-false}
 
+      ## --- Source: MinIO (multi-bucket) ------------------------------------
+      ## ENDPOINT must be a full URL incl. scheme and port, e.g.
+      ##   http://minio:9000  or  https://minio.example.com
+      MIGRATION_STORAGE_SOURCE_ENDPOINT:  ${MIGRATION_STORAGE_SOURCE_ENDPOINT}
       MIGRATION_STORAGE_SOURCE_ACCESSKEY: ${MIGRATION_STORAGE_SOURCE_ACCESSKEY}
       MIGRATION_STORAGE_SOURCE_SECRETKEY: ${MIGRATION_STORAGE_SOURCE_SECRETKEY}
-      MIGRATION_STORAGE_SOURCE_ENDPOINT: ${MIGRATION_STORAGE_SOURCE_ENDPOINT}
-      MIGRATION_STORAGE_SOURCE_REGION: ${MIGRATION_STORAGE_SOURCE_REGION:-us-east-1}
+      ## AWS region MinIO reports back to the SDK (MinIO default: us-east-1).
+      MIGRATION_STORAGE_SOURCE_REGION:    ${MIGRATION_STORAGE_SOURCE_REGION:-us-east-1}
 
+      ## --- Destination: AWS S3 (single bucket) -----------------------------
+      ## ENDPOINT must be a full URL incl. scheme, e.g.
+      ##   https://s3.eu-central-1.amazonaws.com
+      ## Leave empty to let the AWS SDK derive it from DESTINATION_REGION.
+      MIGRATION_STORAGE_DESTINATION_ENDPOINT:  ${MIGRATION_STORAGE_DESTINATION_ENDPOINT:-}
       MIGRATION_STORAGE_DESTINATION_ACCESSKEY: ${MIGRATION_STORAGE_DESTINATION_ACCESSKEY}
       MIGRATION_STORAGE_DESTINATION_SECRETKEY: ${MIGRATION_STORAGE_DESTINATION_SECRETKEY}
-      MIGRATION_STORAGE_DESTINATION_REGION: ${MIGRATION_STORAGE_DESTINATION_REGION}
-      MIGRATION_STORAGE_DESTINATION_ENDPOINT: ${MIGRATION_STORAGE_DESTINATION_ENDPOINT:-}
+      MIGRATION_STORAGE_DESTINATION_REGION:    ${MIGRATION_STORAGE_DESTINATION_REGION}
 
-    restart: "no"
+      ## --- Migration tuning (concurrency, batching, buffering) -------------
+      ## See README.md → "Performance tuning" for sizing guidance.
+      MIGRATION_PARALLELISM:                 ${MIGRATION_PARALLELISM:-8}
+      MIGRATION_INTRA_PROJECT_PARALLELISM:   ${MIGRATION_INTRA_PROJECT_PARALLELISM:-16}
+      MIGRATION_BATCH_SIZE:                  ${MIGRATION_BATCH_SIZE:-500000}
+      MIGRATION_STORAGE_MAX_IN_MEMORY_COPY_MB: ${MIGRATION_STORAGE_MAX_IN_MEMORY_COPY_MB:-128}
+      MIGRATION_PROGRESS_LOG_INTERVAL:       ${MIGRATION_PROGRESS_LOG_INTERVAL:-5000}
+
+      ## --- DB attachment-update tuning -------------------------------------
+      MIGRATION_DB_ATTACHMENT_UPDATE_BATCH_SIZE:  ${MIGRATION_DB_ATTACHMENT_UPDATE_BATCH_SIZE:-1000}
+      MIGRATION_DB_ATTACHMENT_CREATION_DATE_COLUMN: ${MIGRATION_DB_ATTACHMENT_CREATION_DATE_COLUMN:-creation_date}
+      ## Only migrate rows created strictly before this timestamp.
+      ## Empty disables the cutoff. Format: 'YYYY-MM-DD HH:MM:SS.mmm'
+      MIGRATION_DB_ATTACHMENT_CUTOFF: ${MIGRATION_DB_ATTACHMENT_CUTOFF:-}
+
+      ## --- Verification flags ----------------------------------------------
+      ## HEAD each object on the destination after copy — guarantees the
+      ## object is really there before the DB row is rewritten.
+      MIGRATION_S3_VERIFY_DESTINATION_AFTER_COPY: ${MIGRATION_S3_VERIFY_DESTINATION_AFTER_COPY:-true}
+      ## HEAD each source object before copy — skip silently-missing keys.
+      MIGRATION_S3_HEAD_SOURCE_BEFORE_COPY:       ${MIGRATION_S3_HEAD_SOURCE_BEFORE_COPY:-true}
+
+      ## --- JVM -------------------------------------------------------------
+      ## -Xmx must comfortably fit MIGRATION_STORAGE_MAX_IN_MEMORY_COPY_MB
+      ## times concurrency overhead. See "Tuning triangle" in the chart README.
+      JAVA_OPTS: ${JAVA_OPTS:--Xmx4g -XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=70}

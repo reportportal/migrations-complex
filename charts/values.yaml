@@ -1,66 +1,225 @@
+## ----------------------------------------------------------------------------
+## ReportPortal migrations-complex Helm chart
 ##
-## MinIO multi-bucket → AWS S3 single-bucket migration (one Kubernetes Job).
+## A single Kubernetes Job that copies ReportPortal data from a multi-bucket
+## MinIO source into a single bucket on AWS S3, and updates the corresponding
+## attachment records in the ReportPortal PostgreSQL database.
 ##
-database:
-  secretName: ""
-  passwordKeyName: "postgresql-password"
-  endpoint: postgresql.postgresql.svc.cluster.local
-  port: 5432
-  user: rpuser
-  dbName: reportportal
-  password: ""
-  maximumPoolSize: 20
 
-storage:
-  minio:
-    secretName: ""
-    accessKey: ""
-    secretKey: ""
-    accessKeyName: "access-key"
-    secretKeyName: "secret-key"
-    endpoint: minio.minio.svc.cluster.local
-    ssl: false
-    port: 9000
-  s3:
-    region: "eu-central-1"
-    secretName: ""
-    accessKey: ""
-    secretKey: ""
-    accessKeyName: "access-key"
-    secretKeyName: "secret-key"
-    ssl: true
-    endpoint: s3.eu-central-1.amazonaws.com
+## @section Common parameters
+##
 
-migration:
-  # S3 bucket that will be created if missing (must match storage.s3.region).
-  destinationBucket: "rp-iaas-epam-production-rp-storage"
-  projectBucketPrefix: "prj-"
-  pluginsBucket: "rp-bucket"
-  removeSourceBucketsAfterMigration: false
-  sourceRegion: "us-east-1"
-  s3DestinationEndpointOverride: ""
-  maxInMemoryCopyMb: 128
-  parallelism: 8
-  intraProjectParallelism: 16
-  batchSize: 500000
-  progressLogInterval: 5000
-  attachmentUpdateBatchSize: 1000
-  # Column name on public.attachment for creation-date cutoff (maps to MIGRATION_DB_ATTACHMENT_CREATION_DATE_COLUMN)
-  attachmentCreationDateColumn: creation_date
-  # Max creation time to migrate (UTC / ISO-8601 / epoch ms). Empty = use JVM "now" at project-data start (MIGRATION_DB_ATTACHMENT_CUTOFF)
-  attachmentCutoff: ""
-  verifyDestinationAfterCopy: true
-  headSourceBeforeCopy: true
-
-image:
-  repository: reportportal/migrations-complex
-  tag: "1.0.0"
-  pullPolicy: IfNotPresent
-
-imagePullSecrets: []
+## @param nameOverride       Partially override the chart name (release name kept)
+## @param fullnameOverride   Fully override the chart fullname
+##
 nameOverride: ""
 fullnameOverride: ""
 
+
+## @section Image parameters
+##
+
+image:
+  ## @param image.repository   Migration container image repository
+  repository: reportportal/migrations-complex
+  ## @param image.tag          Migration container image tag (immutable tags recommended)
+  tag: "1.0.0"
+  ## @param image.pullPolicy   Image pull policy. One of: Always, IfNotPresent, Never
+  pullPolicy: IfNotPresent
+
+## @param imagePullSecrets    References to Secrets in the same namespace for pulling private images
+## e.g.
+##   imagePullSecrets:
+##     - name: my-registry-secret
+##
+imagePullSecrets: []
+
+
+## @section Migration parameters
+##
+## Tuning knobs for the migration process itself: concurrency, batch sizes,
+## verification flags. These map 1:1 to env vars consumed by the Java app
+## (MIGRATION_PARALLELISM, MIGRATION_BATCH_SIZE, MIGRATION_STORAGE_MAX_IN_MEMORY_COPY_MB, ...).
+##
+## --- Tuning triangle ---------------------------------------------------------
+## App-level knobs here are operationally coupled with two other layers that
+## live further down the file (kept separate to follow Bitnami / Kubernetes
+## conventions for `resources` and JVM options):
+##
+##   migration.maxInMemoryCopyMb  +  migration.parallelism * overhead
+##                ≤  JVM heap (`jvmArgs`, e.g. -Xmx4g)
+##                ≤  container memory limit (`resources.limits.memory`)
+##
+## Rule of thumb when scaling up:
+##   1. Increase `migration.parallelism` and/or `migration.maxInMemoryCopyMb`.
+##   2. Bump `jvmArgs` -Xmx (and -Xms) accordingly.
+##   3. Raise `resources.limits.memory` to at least 1.25× the new -Xmx
+##      (leave headroom for off-heap, native S3 SDK buffers, GC overhead).
+##   4. Raise `resources.limits.cpu` if `migration.parallelism * intraProjectParallelism`
+##      grows substantially.
+## ----------------------------------------------------------------------------
+##
+
+migration:
+  ## @param migration.parallelism                  Concurrent top-level copy workers (one per project)
+  parallelism: 8
+  ## @param migration.intraProjectParallelism      Concurrent workers within a single project
+  intraProjectParallelism: 16
+  ## @param migration.batchSize                    Number of objects copied per batch
+  batchSize: 500000
+  ## @param migration.maxInMemoryCopyMb            Max payload (MB) buffered in-memory per copy operation
+  maxInMemoryCopyMb: 128
+  ## @param migration.progressLogInterval          Progress log interval, in milliseconds
+  progressLogInterval: 5000
+  ## @param migration.attachmentUpdateBatchSize    Batch size for updating `attachments` rows in the database
+  attachmentUpdateBatchSize: 1000
+  ## @param migration.attachmentCreationDateColumn DB column name used as the attachment "creation date"
+  attachmentCreationDateColumn: "creation_date"
+  ## @param migration.attachmentCutoff             Only migrate attachments created strictly before this timestamp
+  ## Empty disables the cutoff. Format: 'YYYY-MM-DD HH:MM:SS.mmm'
+  attachmentCutoff: ""
+  ## @param migration.verifyDestinationAfterCopy   HEAD each object on the destination after copy
+  verifyDestinationAfterCopy: true
+  ## @param migration.headSourceBeforeCopy         HEAD each source object before copy
+  headSourceBeforeCopy: true
+  ## @param migration.removeSourceBucketsAfterMigration   Delete source MinIO buckets after a successful migration
+  removeSourceBucketsAfterMigration: false
+
+
+## @section Source configuration
+##
+## The migration reads object data from MinIO and reads / updates the
+## ReportPortal records that point at those objects in PostgreSQL.
+##
+
+source:
+
+  ## ReportPortal PostgreSQL database.
+  ## The migration updates `attachments` rows so they reference the new
+  ## consolidated S3 bucket layout.
+  ##
+  database:
+    ## @param source.database.endpoint         PostgreSQL host (DNS or IP, no scheme / no port)
+    ## Format: <service>.<namespace>.svc.cluster.local
+    endpoint: postgresql.default.svc.cluster.local
+    ## @param source.database.port             PostgreSQL port
+    port: 5432
+    ## @param source.database.user             PostgreSQL user
+    user: rpuser
+    ## @param source.database.dbName           PostgreSQL database name
+    dbName: reportportal
+    ## @param source.database.maximumPoolSize  Maximum size of the JDBC connection pool
+    maximumPoolSize: 20
+
+    ## Authentication. Provide EITHER an existing Secret OR a plain password.
+    ## A Secret is strongly recommended for any non-local environment.
+    ##
+    ## @param source.database.password         Plain-text password (used only if `secretName` is empty)
+    password: ""
+    ## @param source.database.secretName       Name of an existing Secret holding the DB password
+    secretName: ""
+    ## @param source.database.passwordKeyName  Key inside the Secret that holds the DB password
+    passwordKeyName: "postgresql-password"
+
+  ## MinIO multi-bucket source.
+  ## Buckets matching `buckets.projectPrefix` plus the dedicated `buckets.pluginsBucket`
+  ## are the inputs that get copied to the S3 destination.
+  ##
+  minio:
+    ## @param source.minio.endpoint   MinIO host (no scheme, no port)
+    ## Format: <service>.<namespace>.svc.cluster.local
+    endpoint: minio.default.svc.cluster.local
+    ## @param source.minio.port       MinIO port
+    port: 9000
+    ## @param source.minio.ssl        Use HTTPS (true) or HTTP (false) when talking to MinIO
+    ssl: false
+    ## @param source.minio.region     AWS region reported by MinIO (MinIO default: "us-east-1")
+    region: ""
+
+    ## Authentication. Provide EITHER an existing Secret OR plain access / secret keys.
+    ##
+    ## @param source.minio.accessKey      Plain-text access key (used only if `secretName` is empty)
+    accessKey: ""
+    ## @param source.minio.secretKey      Plain-text secret key (used only if `secretName` is empty)
+    secretKey: ""
+    ## @param source.minio.secretName     Name of an existing Secret holding MinIO credentials
+    secretName: ""
+    ## @param source.minio.accessKeyName  Key inside the Secret that holds the access key
+    accessKeyName: "access-key"
+    ## @param source.minio.secretKeyName  Key inside the Secret that holds the secret key
+    secretKeyName: "secret-key"
+
+    ## Layout of the source buckets to migrate.
+    buckets:
+      ## @param source.minio.buckets.projectPrefix  Prefix matching per-project buckets (e.g. "prj-" matches prj-1, prj-2, ...)
+      projectPrefix: "prj-"
+      ## @param source.minio.buckets.pluginsBucket  Bucket holding shared / plugins data
+      pluginsBucket: "rp-bucket"
+
+
+## @section Destination configuration
+##
+## The migration writes all consolidated objects to a single AWS S3 bucket
+## and updates the related DB records to point at it.
+##
+
+destination:
+
+  ## AWS S3 single-bucket destination.
+  ##
+  s3:
+    ## @param destination.s3.region            AWS region for the destination bucket
+    ## Used both for the AWS SDK and to derive the default S3 endpoint host below.
+    region: "eu-central-1"
+    ## @param destination.s3.bucket            Destination bucket name (must already exist)
+    bucket: ""
+    ## @param destination.s3.endpoint          S3 API endpoint host (no scheme).
+    ## Optional override — leave empty to derive from `region`:
+    ##   s3.<region>.amazonaws.com
+    ## ref: https://docs.aws.amazon.com/general/latest/gr/s3.html
+    endpoint: ""
+    ## @param destination.s3.port              Optional explicit port (leave empty to use the scheme default)
+    port: ""
+    ## @param destination.s3.ssl               Use HTTPS (true) or HTTP (false) for the S3 endpoint
+    ssl: true
+    ## @param destination.s3.endpointOverride  Full URL override (incl. scheme), useful for VPC endpoints or
+    ## S3-compatible services. When set, takes precedence over `endpoint` / `port` / `ssl`.
+    endpointOverride: ""
+
+    ## Authentication. Provide EITHER an existing Secret OR plain access / secret keys.
+    ## On EKS prefer IRSA: leave all of these empty and supply the role through
+    ## `serviceAccount.annotations`.
+    ##
+    ## @param destination.s3.accessKey      Plain-text access key (used only if `secretName` is empty)
+    accessKey: ""
+    ## @param destination.s3.secretKey      Plain-text secret key (used only if `secretName` is empty)
+    secretKey: ""
+    ## @param destination.s3.secretName     Name of an existing Secret holding S3 credentials
+    secretName: ""
+    ## @param destination.s3.accessKeyName  Key inside the Secret that holds the access key
+    accessKeyName: "access-key"
+    ## @param destination.s3.secretKeyName  Key inside the Secret that holds the secret key
+    secretKeyName: "secret-key"
+
+
+## @section Job parameters
+##
+
+## @param backoffLimit  Number of retries before the Job is marked as failed
+##
+backoffLimit: 0
+
+## @param jvmArgs       JVM options forwarded to the migration container via JAVA_OPTS.
+## Coupled with `migration.maxInMemoryCopyMb` / `migration.parallelism` and with
+## `resources.limits.memory` — see the "Tuning triangle" note in the `migration:` section.
+##
+jvmArgs: "-Xmx4g -XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=70"
+
+## @param resources     Container resource requests and limits.
+## Must comfortably fit `jvmArgs` -Xmx plus off-heap / SDK buffers — see the
+## "Tuning triangle" note in the `migration:` section.
+## For large datasets consider e.g. limits: { cpu: 2000m, memory: 2Gi }.
+##
 resources:
   limits:
     cpu: 500m
@@ -69,18 +228,59 @@ resources:
     cpu: 250m
     memory: 248Mi
 
-backoffLimit: 0
-jvmArgs: "-Xmx4g -XX:+UseG1GC -XX:InitiatingHeapOccupancyPercent=70"
 
+## @section Pod parameters
+##
+
+## @param extraInitContainers  Extra init containers executed before the migration container.
+## e.g.
+##   - name: wait-for-db
+##     image: busybox:1.35
+##     command: ['sh', '-c', 'until nc -z postgresql 5432; do sleep 2; done']
+##
 extraInitContainers: []
-nodeSelector: {}
-tolerations: []
-affinity: {}
+
+## @param podAnnotations       Annotations added to the migration Pod
+##
 podAnnotations: {}
+
+## @param podSecurityContext   Pod-level security context
+## e.g.
+##   fsGroup: 2000
+##
 podSecurityContext: {}
+
+## @param securityContext      Container-level security context
+## e.g.
+##   runAsNonRoot: true
+##   runAsUser: 1000
+##   readOnlyRootFilesystem: true
+##   allowPrivilegeEscalation: false
+##
 securityContext: {}
 
+## @param nodeSelector         Node labels for pod assignment
+##
+nodeSelector: {}
+
+## @param tolerations          Tolerations for pod scheduling
+##
+tolerations: []
+
+## @param affinity             Affinity rules for pod scheduling
+##
+affinity: {}
+
+
+## @section ServiceAccount parameters
+##
+
 serviceAccount:
+  ## @param serviceAccount.create       Whether to create a ServiceAccount for the Job
   create: true
-  annotations: {}
+  ## @param serviceAccount.name         ServiceAccount name (auto-generated from chart fullname if empty)
   name: ""
+  ## @param serviceAccount.annotations  Annotations on the ServiceAccount.
+  ## On EKS use IRSA, e.g.:
+  ##   eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<role>
+  annotations: {}

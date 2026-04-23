@@ -2,8 +2,8 @@ apiVersion: v2
 name: migrations-complex
 description: ReportPortal Migrations Complex Service
 type: application
-version: 26.1.28
-appVersion: "1.0.1"
+version: 26.4.15
+appVersion: "2.0.0"
 sources:
   - https://github.com/reportportal/migrations-complex
 keywords:

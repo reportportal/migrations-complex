@@ -60,3 +60,42 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+MinIO source endpoint URL: <scheme>://<host>[:<port>]
+*/}}
+{{- define "migrations-complex.sourceMinioUrl" -}}
+{{- $scheme := ternary "https" "http" .Values.source.minio.ssl -}}
+{{- $host := .Values.source.minio.endpoint -}}
+{{- $port := .Values.source.minio.port -}}
+{{- if $port -}}
+{{- printf "%s://%s:%v" $scheme $host $port -}}
+{{- else -}}
+{{- printf "%s://%s" $scheme $host -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+S3 destination endpoint URL.
+Resolution order:
+  1. `destination.s3.endpointOverride` — used as-is (must include scheme).
+  2. `destination.s3.endpoint` — host only; combined with `ssl` and optional `port`.
+  3. Derived default — `s3.<destination.s3.region>.amazonaws.com`.
+*/}}
+{{- define "migrations-complex.destinationS3Url" -}}
+{{- if .Values.destination.s3.endpointOverride -}}
+{{- .Values.destination.s3.endpointOverride -}}
+{{- else -}}
+{{- $scheme := ternary "https" "http" .Values.destination.s3.ssl -}}
+{{- $host := .Values.destination.s3.endpoint -}}
+{{- if not $host -}}
+{{- $host = printf "s3.%s.amazonaws.com" .Values.destination.s3.region -}}
+{{- end -}}
+{{- $port := .Values.destination.s3.port -}}
+{{- if $port -}}
+{{- printf "%s://%s:%v" $scheme $host $port -}}
+{{- else -}}
+{{- printf "%s://%s" $scheme $host -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

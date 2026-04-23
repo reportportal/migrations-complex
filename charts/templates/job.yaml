@@ -36,75 +36,88 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            ## Feature flag — this Job always runs the storage migration
             - name: RP_STORAGE_MIGRATION
               value: "true"
+
+            ## --- Source: ReportPortal PostgreSQL ---
             - name: RP_DB_HOST
-              value: "{{ .Values.database.endpoint }}"
+              value: "{{ .Values.source.database.endpoint }}"
             - name: RP_DB_USER
-              value: "{{ .Values.database.user }}"
+              value: "{{ .Values.source.database.user }}"
             - name: RP_DB_PASS
-              {{- if .Values.database.secretName }}
+              {{- if .Values.source.database.secretName }}
               valueFrom:
                 secretKeyRef:
-                  name: "{{ .Values.database.secretName }}"
-                  key: "{{ .Values.database.passwordKeyName }}"
+                  name: "{{ .Values.source.database.secretName }}"
+                  key: "{{ .Values.source.database.passwordKeyName }}"
               {{- else }}
-              value: "{{ .Values.database.password }}"
+              value: "{{ .Values.source.database.password }}"
               {{- end }}
             - name: RP_DB_NAME
-              value: "{{ .Values.database.dbName }}"
+              value: "{{ .Values.source.database.dbName }}"
+            - name: RP_DATASOURCE_MAXIMUMPOOLSIZE
+              value: "{{ .Values.source.database.maximumPoolSize }}"
+
+            ## --- Bucket layout (source MinIO buckets, destination S3 bucket) ---
             - name: DATASTORE_BUCKETPREFIX
-              value: "{{ .Values.migration.projectBucketPrefix | default "prj-" }}"
+              value: "{{ .Values.source.minio.buckets.projectPrefix }}"
             - name: DATASTORE_DEFAULTBUCKETNAME
-              value: "{{ .Values.migration.pluginsBucket }}"
+              value: "{{ .Values.source.minio.buckets.pluginsBucket }}"
             - name: DATASTORE_SINGLEBUCKETNAME
-              value: "{{ .Values.migration.destinationBucket }}"
+              value: "{{ .Values.destination.s3.bucket }}"
             - name: DATASTORE_REGION
-              value: "{{ .Values.storage.s3.region }}"
+              value: "{{ .Values.destination.s3.region }}"
             - name: DATASTORE_REMOVE_AFTER_MIGRATION
               value: "{{ .Values.migration.removeSourceBucketsAfterMigration }}"
-            {{- if .Values.storage.minio.secretName }}
+
+            ## --- Source: MinIO ---
+            {{- if .Values.source.minio.secretName }}
             - name: MIGRATION_STORAGE_SOURCE_ACCESSKEY
               valueFrom:
                 secretKeyRef:
-                  name: "{{ .Values.storage.minio.secretName }}"
-                  key: "{{ .Values.storage.minio.accessKeyName }}"
+                  name: "{{ .Values.source.minio.secretName }}"
+                  key: "{{ .Values.source.minio.accessKeyName }}"
             - name: MIGRATION_STORAGE_SOURCE_SECRETKEY
               valueFrom:
                 secretKeyRef:
-                  name: "{{ .Values.storage.minio.secretName }}"
-                  key: "{{ .Values.storage.minio.secretKeyName }}"
+                  name: "{{ .Values.source.minio.secretName }}"
+                  key: "{{ .Values.source.minio.secretKeyName }}"
             {{- else }}
             - name: MIGRATION_STORAGE_SOURCE_ACCESSKEY
-              value: "{{ .Values.storage.minio.accessKey }}"
+              value: "{{ .Values.source.minio.accessKey }}"
             - name: MIGRATION_STORAGE_SOURCE_SECRETKEY
-              value: "{{ .Values.storage.minio.secretKey }}"
+              value: "{{ .Values.source.minio.secretKey }}"
             {{- end }}
             - name: MIGRATION_STORAGE_SOURCE_ENDPOINT
-              value: "{{ if .Values.storage.minio.ssl }}https{{ else }}http{{ end }}://{{ .Values.storage.minio.endpoint }}:{{ .Values.storage.minio.port }}"
+              value: {{ include "migrations-complex.sourceMinioUrl" . | quote }}
             - name: MIGRATION_STORAGE_SOURCE_REGION
-              value: "{{ .Values.migration.sourceRegion }}"
-            {{- if .Values.storage.s3.secretName }}
+              value: "{{ .Values.source.minio.region }}"
+
+            ## --- Destination: AWS S3 ---
+            {{- if .Values.destination.s3.secretName }}
             - name: MIGRATION_STORAGE_DESTINATION_ACCESSKEY
               valueFrom:
                 secretKeyRef:
-                  name: "{{ .Values.storage.s3.secretName }}"
-                  key: "{{ .Values.storage.s3.accessKeyName }}"
+                  name: "{{ .Values.destination.s3.secretName }}"
+                  key: "{{ .Values.destination.s3.accessKeyName }}"
             - name: MIGRATION_STORAGE_DESTINATION_SECRETKEY
               valueFrom:
                 secretKeyRef:
-                  name: "{{ .Values.storage.s3.secretName }}"
-                  key: "{{ .Values.storage.s3.secretKeyName }}"
+                  name: "{{ .Values.destination.s3.secretName }}"
+                  key: "{{ .Values.destination.s3.secretKeyName }}"
             {{- else }}
             - name: MIGRATION_STORAGE_DESTINATION_ACCESSKEY
-              value: "{{ .Values.storage.s3.accessKey }}"
+              value: "{{ .Values.destination.s3.accessKey }}"
             - name: MIGRATION_STORAGE_DESTINATION_SECRETKEY
-              value: "{{ .Values.storage.s3.secretKey }}"
+              value: "{{ .Values.destination.s3.secretKey }}"
             {{- end }}
             - name: MIGRATION_STORAGE_DESTINATION_REGION
-              value: "{{ .Values.storage.s3.region }}"
+              value: "{{ .Values.destination.s3.region }}"
             - name: MIGRATION_STORAGE_DESTINATION_ENDPOINT
-              value: "{{ .Values.migration.s3DestinationEndpointOverride }}"
+              value: {{ include "migrations-complex.destinationS3Url" . | quote }}
+
+            ## --- Migration tuning ---
             - name: MIGRATION_STORAGE_MAX_IN_MEMORY_COPY_MB
               value: "{{ .Values.migration.maxInMemoryCopyMb }}"
             - name: MIGRATION_PARALLELISM
@@ -125,8 +138,8 @@ spec:
               value: "{{ .Values.migration.verifyDestinationAfterCopy }}"
             - name: MIGRATION_S3_HEAD_SOURCE_BEFORE_COPY
               value: "{{ .Values.migration.headSourceBeforeCopy }}"
-            - name: RP_DATASOURCE_MAXIMUMPOOLSIZE
-              value: "{{ .Values.database.maximumPoolSize }}"
+
+            ## --- JVM ---
             - name: JAVA_OPTS
               value: "{{ .Values.jvmArgs }}"
           resources:
